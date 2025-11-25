@@ -3,9 +3,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <groupId>de.arbeitagentur.opdt</groupId>
-    <artifactId>eudi-wallet-keycloak-demo</artifactId>
+    <artifactId>eudi-wallet-playground</artifactId>
     <version>1.0.0</version>
-    <name>EUDI Wallet Keycloak Demo</name>
+    <name>EUDI Wallet Playground</name>
     <description>Spring Boot demo wallet interacting with Keycloak OID4VCI</description>
     <properties>
         <java.version>21</java.version>
