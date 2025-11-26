@@ -6,6 +6,7 @@ import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import de.arbeitsagentur.keycloak.wallet.verification.config.VerifierProperties;
@@ -61,6 +62,7 @@ public class VerifierAuthService {
         if ("verifier_attestation".equalsIgnoreCase(authType)) {
             requestObjectMode = "request_uri";
         }
+        RequestObjectMode parsedMode = RequestObjectMode.fromString(requestObjectMode);
         UriComponentsBuilder builder = effectiveWalletAuth != null && !effectiveWalletAuth.isBlank()
                 ? UriComponentsBuilder.fromUriString(effectiveWalletAuth)
                 : baseUri.cloneBuilder().path("/oid4vp/auth");
@@ -72,7 +74,7 @@ public class VerifierAuthService {
             if (x5c.isEmpty()) {
                 throw new IllegalStateException("client_cert must include a certificate chain for x509_hash");
             }
-            String requestObject = buildRequestObject(callback.toString(), state, nonce, effectiveClientId, effectiveResponseType, dcqlQuery, clientMetadata, null, x5c, popKey);
+            BuiltRequestObject requestObject = buildRequestObject(callback.toString(), state, nonce, effectiveClientId, effectiveResponseType, dcqlQuery, clientMetadata, null, x5c, popKey);
             populateWithRequestObject(populated, requestObject, requestObjectMode, baseUri);
         } else if ("verifier_attestation".equalsIgnoreCase(authType)) {
             RSAKey attestationKey = verifierKeyService.loadOrCreateSigningKey();
@@ -80,30 +82,36 @@ public class VerifierAuthService {
                 attestationKey = verifierCryptoService.parsePrivateKeyWithCertificate(attestationCert);
             }
             attestationValue = createVerifierAttestation(effectiveClientId, attestationIssuer, attestationKey, callback.toString());
-            String requestObject = buildRequestObject(callback.toString(), state, nonce, effectiveClientId, effectiveResponseType, dcqlQuery, clientMetadata, attestationValue, null, attestationKey);
+            BuiltRequestObject requestObject = buildRequestObject(callback.toString(), state, nonce, effectiveClientId, effectiveResponseType, dcqlQuery, clientMetadata, attestationValue, null, attestationKey);
             usedRequestUri = populateWithRequestObject(populated, requestObject, requestObjectMode, baseUri);
         } else {
-            populated
-                    .queryParam("response_type", qp(effectiveResponseType))
-                    .queryParam("nonce", qp(nonce))
-                    .queryParam("response_mode", qp("direct_post"))
-                    .queryParam("response_uri", qp(callback.toString()))
-                    .queryParam("state", qp(state))
-                    .queryParam("dcql_query", qp(dcqlQuery));
-            if (clientMetadata != null && !clientMetadata.isBlank()) {
-                populated.queryParam("client_metadata", qp(clientMetadata));
-            }
-            if (walletClientCert != null && !walletClientCert.isBlank()) {
-                populated.queryParam("client_cert", qp(walletClientCert));
+            if (parsedMode == RequestObjectMode.REQUEST_URI) {
+                RSAKey signerKey = verifierKeyService.loadOrCreateSigningKey();
+                BuiltRequestObject requestObject = buildRequestObject(callback.toString(), state, nonce, effectiveClientId, effectiveResponseType, dcqlQuery, clientMetadata, null, null, signerKey);
+                usedRequestUri = populateWithRequestObject(populated, requestObject, requestObjectMode, baseUri);
+            } else {
+                populated
+                        .queryParam("response_type", qp(effectiveResponseType))
+                        .queryParam("nonce", qp(nonce))
+                        .queryParam("response_mode", qp("direct_post"))
+                        .queryParam("response_uri", qp(callback.toString()))
+                        .queryParam("state", qp(state))
+                        .queryParam("dcql_query", qp(dcqlQuery));
+                if (clientMetadata != null && !clientMetadata.isBlank()) {
+                    populated.queryParam("client_metadata", qp(clientMetadata));
+                }
+                if (walletClientCert != null && !walletClientCert.isBlank()) {
+                    populated.queryParam("client_cert", qp(walletClientCert));
+                }
             }
         }
         return new WalletAuthRequest(populated.build(true).toUri(), authType != null && authType.equalsIgnoreCase("verifier_attestation") ? attestationValue : null, usedRequestUri);
     }
 
-    private boolean populateWithRequestObject(UriComponentsBuilder builder, String requestObject, String requestObjectMode, UriComponentsBuilder baseUri) {
+    private boolean populateWithRequestObject(UriComponentsBuilder builder, BuiltRequestObject requestObject, String requestObjectMode, UriComponentsBuilder baseUri) {
         RequestObjectMode mode = RequestObjectMode.fromString(requestObjectMode);
         if (mode == RequestObjectMode.REQUEST_URI) {
-            String id = requestObjectService.store(requestObject);
+            String id = requestObjectService.store(requestObject.jwt(), requestObject.signerKey());
             URI requestUri = baseUri.cloneBuilder()
                     .path("/verifier/request-object/{id}")
                     .buildAndExpand(id)
@@ -111,16 +119,16 @@ public class VerifierAuthService {
             builder.queryParam("request_uri", qp(requestUri.toString()));
             return true;
         } else {
-            builder.queryParam("request", qp(requestObject));
+            builder.queryParam("request", qp(requestObject.jwt().serialize()));
             return false;
         }
     }
 
-    private String buildRequestObject(String responseUri, String state, String nonce,
-                                      String clientId, String responseType, String dcqlQuery,
-                                      String clientMetadata, String attestationJwt,
-                                      List<com.nimbusds.jose.util.Base64> x5c,
-                                      RSAKey signerKey) {
+    private BuiltRequestObject buildRequestObject(String responseUri, String state, String nonce,
+                                                  String clientId, String responseType, String dcqlQuery,
+                                                  String clientMetadata, String attestationJwt,
+                                                  List<com.nimbusds.jose.util.Base64> x5c,
+                                                  RSAKey signerKey) {
         try {
             JWSHeader.Builder headerBuilder = new JWSHeader.Builder(JWSAlgorithm.RS256)
                     .type(new JOSEObjectType("oauth-authz-req+jwt"))
@@ -149,7 +157,7 @@ public class VerifierAuthService {
             claims.expirationTime(java.util.Date.from(java.time.Instant.now().plusSeconds(600)));
             SignedJWT jwt = new SignedJWT(headerBuilder.build(), claims.build());
             jwt.sign(new RSASSASigner(signerKey));
-            return jwt.serialize();
+            return new BuiltRequestObject(jwt, signerKey);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to build request object", e);
         }
@@ -194,6 +202,9 @@ public class VerifierAuthService {
     }
 
     public record WalletAuthRequest(URI uri, String attestationJwt, boolean usedRequestUri) {
+    }
+
+    public record BuiltRequestObject(SignedJWT jwt, JWK signerKey) {
     }
 
     public enum RequestObjectMode {

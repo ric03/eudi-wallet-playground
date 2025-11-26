@@ -1,13 +1,12 @@
 package de.arbeitsagentur.keycloak.wallet;
 
+import com.authlete.sd.Disclosure;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
-import de.arbeitsagentur.keycloak.wallet.demo.oid4vp.PresentationService;
-import com.nimbusds.jwt.SignedJWT;
-import com.authlete.sd.Disclosure;
+import com.nimbusds.jose.jwk.ECKey;
+import com.nimbusds.jose.jwk.JWKSet;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
@@ -44,6 +43,10 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
+import com.nimbusds.jwt.SignedJWT;
+import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
+import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
+import de.arbeitsagentur.keycloak.wallet.demo.oid4vp.PresentationService;
 
 import java.io.IOException;
 import java.net.URI;
@@ -61,6 +64,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -103,6 +107,8 @@ class WalletIntegrationTest {
     ObjectMapper objectMapper;
     @Autowired
     de.arbeitsagentur.keycloak.wallet.verification.service.VerifierKeyService verifierKeyService;
+    @Autowired
+    WalletKeyService walletKeyService;
     @Autowired
     PresentationService presentationService;
     @Autowired
@@ -852,6 +858,52 @@ class WalletIntegrationTest {
     }
 
     @Test
+    void requestUriResponseIsEncryptedWithWalletNonce() throws Exception {
+        URI base = URI.create("http://localhost:" + serverPort);
+        BasicCookieStore cookieStore = new BasicCookieStore();
+        HttpClientContext context = HttpClientContext.create();
+        context.setCookieStore(cookieStore);
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setRedirectsEnabled(false)
+                .setCookieSpec(StandardCookieSpec.RELAXED)
+                .build();
+        try (CloseableHttpClient client = HttpClients.custom()
+                .setDefaultCookieStore(cookieStore)
+                .setDefaultRequestConfig(requestConfig)
+                .build()) {
+            authenticateThroughLogin(client, context, base);
+            try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/issue")), context)) {
+                assertThat(issueResponse.getCode()).isEqualTo(200);
+            }
+            String dcql = fetchDefaultDcqlQuery(client, context, base);
+            URI walletAuth = startPresentationRequest(client, context, base, dcql, List.of("given_name"), null,
+                    null, "plain", null, null, null, "request_uri");
+            String requestUri = URLEncodedUtils.parse(walletAuth, StandardCharsets.UTF_8).stream()
+                    .filter(param -> "request_uri".equals(param.getName()))
+                    .map(NameValuePair::getValue)
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException("request_uri missing"));
+            HttpPost roRequest = new HttpPost(requestUri);
+            List<NameValuePair> form = new ArrayList<>();
+            String walletMetadata = buildWalletMetadataForTest();
+            String walletNonce = randomWalletNonce();
+            form.add(new BasicNameValuePair("wallet_metadata", walletMetadata));
+            form.add(new BasicNameValuePair("wallet_nonce", walletNonce));
+            roRequest.setEntity(new UrlEncodedFormEntity(form, StandardCharsets.UTF_8));
+            try (CloseableHttpResponse roResponse = client.execute(roRequest, context)) {
+                assertThat(roResponse.getCode()).isEqualTo(200);
+                String body = new String(roResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
+                assertThat(body.chars().filter(ch -> ch == '.').count()).isEqualTo(4);
+                com.nimbusds.jose.JWEObject jwe = com.nimbusds.jose.JWEObject.parse(body);
+                jwe.decrypt(new com.nimbusds.jose.crypto.ECDHDecrypter(walletKeyService.loadOrCreateKey()));
+                String requestObject = jwe.getPayload().toString();
+                SignedJWT jwt = SignedJWT.parse(requestObject);
+                assertThat(jwt.getJWTClaimsSet().getStringClaim("wallet_nonce")).isEqualTo(walletNonce);
+            }
+        }
+    }
+
+    @Test
     void verifierResultShowsKeyBindingJwt() throws Exception {
         URI base = URI.create("http://localhost:" + serverPort);
         BasicCookieStore cookieStore = new BasicCookieStore();
@@ -1463,6 +1515,22 @@ class WalletIntegrationTest {
 
     private boolean looksLikeJwe(String token) {
         return token != null && token.chars().filter(ch -> ch == '.').count() == 4;
+    }
+
+    private String buildWalletMetadataForTest() throws Exception {
+        ECKey key = walletKeyService.loadOrCreateKey();
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("jwks", new JWKSet(key.toPublicJWK()).toJSONObject(false));
+        meta.put("request_object_encryption_alg_values_supported", List.of("ECDH-ES+A256KW"));
+        meta.put("request_object_encryption_enc_values_supported", List.of("A256GCM"));
+        meta.put("request_object_signing_alg_values_supported", List.of("RS256"));
+        return objectMapper.writeValueAsString(meta);
+    }
+
+    private String randomWalletNonce() {
+        byte[] random = new byte[24];
+        new SecureRandom().nextBytes(random);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(random);
     }
 
     private SelfSignedMaterial generateSelfSignedCert() throws Exception {

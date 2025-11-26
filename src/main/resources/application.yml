@@ -19,6 +19,7 @@ wallet:
   tls-key-store-type: ${WALLET_TLS_KEY_STORE_TYPE:PKCS12}
   trusted-attestation-issuers:
     - ${WALLET_TRUSTED_ATTESTATION_ISSUERS:demo-attestation-issuer}
+  request-uri-wallet-metadata-enabled: ${WALLET_REQUEST_URI_WALLET_METADATA_ENABLED:true}
 verifier:
   dcql-query-file: ${DCQL_QUERY_FILE:}
   default-dcql-query: ${DEFAULT_DCQL_QUERY:}

@@ -16,9 +16,22 @@ import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.nimbusds.jose.EncryptionMethod;
+import com.nimbusds.jose.JWEAlgorithm;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.jwk.Curve;
+import com.nimbusds.jose.jwk.ECKey;
+import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.KeyUse;
+import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
-import com.nimbusds.jwt.SignedJWT;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -46,6 +59,8 @@ import java.util.UUID;
 @Controller
 @RequestMapping("/verifier")
 public class VerifierController {
+    private static final Logger LOG = LoggerFactory.getLogger(VerifierController.class);
+
     private final DcqlService dcqlService;
     private final VerifierSessionService verifierSessionService;
     private final TrustListService trustListService;
@@ -117,37 +132,55 @@ public class VerifierController {
         return Map.of("dcql_query", dcql);
     }
 
-    @GetMapping(value = "/request-object/{id}", produces = "application/jwt")
+    @GetMapping(value = "/request-object/{id}", produces = "application/oauth-authz-req+jwt")
     public ResponseEntity<String> requestObject(@PathVariable("id") String id, HttpServletRequest request) {
-        String payload = requestObjectService.fetch(id);
-        if (payload == null || payload.isBlank()) {
+        return handleRequestObject(id, null, null, request);
+    }
+
+    @PostMapping(value = "/request-object/{id}", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE, produces = "application/oauth-authz-req+jwt")
+    public ResponseEntity<String> requestObjectPost(@PathVariable("id") String id,
+                                                    @RequestParam(name = "wallet_metadata", required = false) String walletMetadata,
+                                                    @RequestParam(name = "wallet_nonce", required = false) String walletNonce,
+                                                    HttpServletRequest request) {
+        return handleRequestObject(id, walletMetadata, walletNonce, request);
+    }
+
+    private ResponseEntity<String> handleRequestObject(String id, String walletMetadata, String walletNonce, HttpServletRequest request) {
+        JsonNode walletMeta = parseWalletMetadata(walletMetadata);
+        RequestObjectService.SigningRequest signingRequest = determineSigningRequest(walletMeta);
+        LOG.info("request_uri {} {} wallet_nonce={} signing_alg={} encryption_requested={}", request.getMethod(), request.getRequestURI(),
+                walletNonce != null && !walletNonce.isBlank(), signingRequest != null ? signingRequest.alg() : "none",
+                walletMeta != null && walletMeta.has("jwks"));
+        RequestObjectService.ResolvedRequestObject resolved = requestObjectService.resolve(id, walletNonce, signingRequest);
+        if (resolved == null || resolved.serialized() == null || resolved.serialized().isBlank()) {
+            LOG.info("request_uri {} not found or expired", id);
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body("request object not found or expired");
         }
-        String state = "unknown";
-        try {
-            SignedJWT jwt = SignedJWT.parse(payload);
-            String extracted = jwt.getJWTClaimsSet().getStringClaim("state");
-            if (extracted != null && !extracted.isBlank()) {
-                state = extracted;
-            }
-        } catch (Exception ignored) {
-        }
+        JWK encryptionKey = selectEncryptionKey(walletMeta);
+        EncryptionPreferences prefs = extractEncryptionPreferences(walletMeta);
+        EncryptionResult encryption = encryptRequestObject(resolved.serialized(), encryptionKey, prefs.alg(), prefs.enc());
+        String payload = encryption.payload();
+        String state = extractState(resolved.claims());
+        String decoded = buildDecodedForLog(resolved.serialized(), encryption);
+        String responseSummary = "signed=%s wallet_nonce_applied=%s encrypted=%s".formatted(
+                resolved.signed(), resolved.walletNonceApplied(), encryption.encrypted());
+        LOG.info("request_uri {} response signed={} encrypted={} state={}", request.getRequestURI(), resolved.signed(), encryption.encrypted(), state);
         debugLogService.addVerification(
                 state,
                 "Authorization",
                 "request_uri retrieval",
-                "GET",
+                request.getMethod(),
                 request.getRequestURI(),
                 Map.of(),
-                "",
+                walletRequestLog(walletMetadata, walletNonce),
                 HttpStatus.OK.value(),
-                Map.of("Content-Type", "application/jwt"),
-                payload,
+                Map.of("Content-Type", "application/oauth-authz-req+jwt"),
+                responseSummary + "\n" + payload,
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-request-parameter",
-                tokenViewService.decodeJwtLike(payload)
+                decoded
         );
         return ResponseEntity.ok()
-                .contentType(MediaType.valueOf("application/jwt"))
+                .contentType(MediaType.valueOf("application/oauth-authz-req+jwt"))
                 .body(payload);
     }
 
@@ -289,6 +322,7 @@ public class VerifierController {
                                        @RequestParam(name = "error", required = false) String error,
                                        @RequestParam(name = "error_description", required = false) String errorDescription,
                                        HttpSession httpSession) {
+        LOG.info("direct_post callback received state={} error={}", state, error);
         VerificationSteps steps = new VerificationSteps();
         String vpTokenRaw = vpToken;
         String keyBindingJwt = firstNonBlank(keyBindingTokenAlt, keyBindingToken);
@@ -299,6 +333,7 @@ public class VerifierController {
             steps.add("Verifier session and state validation failed",
                     "Verifier session not found or state mismatch.",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+            LOG.info("direct_post callback invalid session state={}", state);
             logCallback(state, "direct_post callback (invalid session)",
                     "POST",
                     "/verifier/callback",
@@ -318,6 +353,7 @@ public class VerifierController {
             steps.add("Wallet returned error: " + error,
                     "Wallet returned error: " + error,
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+            LOG.info("direct_post callback error state={} error={} desc={}", state, error, errorDescription);
             logCallback(state, "direct_post callback (error)",
                     "POST",
                     "/verifier/callback",
@@ -335,6 +371,7 @@ public class VerifierController {
                 steps.add("vp_token missing or empty",
                         "Wallet response did not include a vp_token.",
                         "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+                LOG.info("direct_post callback missing vp_token state={}", state);
                 logCallback(state, "direct_post callback (missing vp_token)",
                         "POST",
                         "/verifier/callback",
@@ -379,6 +416,8 @@ public class VerifierController {
                             tokensToJson(vpTokens.stream().map(VpTokenEntry::token).toList()),
                             keyBindingJwt,
                             effectiveDpop));
+            LOG.info("direct_post callback verified state={} tokens={} key_binding_present={} encrypted_vp={}", state, vpTokens.size(), keyBindingJwt != null && !keyBindingJwt.isBlank(),
+                    tokenViewService.hasEncryptedToken(vpTokens.stream().map(VpTokenEntry::token).toList()));
             Map<String, Object> combined = new LinkedHashMap<>();
             String kbFromPayload = null;
             for (int i = 0; i < payloads.size(); i++) {
@@ -411,6 +450,7 @@ public class VerifierController {
                     Map.of(),
                     e.getMessage(),
                     parseVpTokens(vpTokenRaw), vpTokenRaw, keyBindingJwt, effectiveDpop);
+            LOG.info("direct_post callback verification failed state={} message={}", state, e.getMessage());
             return resultView("Unable to verify credential: " + e.getMessage(), false, steps.titles(), parseVpTokens(vpTokenRaw), vpTokenRaw, idToken,
                     Map.of(), steps.details());
         }
@@ -632,6 +672,167 @@ public class VerifierController {
                 responseBody,
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6",
                 tokenViewService.assembleDecodedForDebug(tokensForDebug, keyBindingToken, dpopToken));
+    }
+
+    private JsonNode parseWalletMetadata(String walletMetadata) {
+        if (walletMetadata == null || walletMetadata.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(walletMetadata);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private JWK selectEncryptionKey(JsonNode walletMeta) {
+        if (walletMeta == null || walletMeta.isMissingNode()) {
+            return null;
+        }
+        JsonNode jwksNode = walletMeta.get("jwks");
+        if (jwksNode == null || jwksNode.isMissingNode()) {
+            return null;
+        }
+        try {
+            JWKSet set = JWKSet.parse(jwksNode.toString());
+            return set.getKeys().stream()
+                    .filter(jwk -> jwk instanceof RSAKey || jwk instanceof ECKey)
+                    .findFirst()
+                    .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private EncryptionPreferences extractEncryptionPreferences(JsonNode walletMeta) {
+        if (walletMeta == null || walletMeta.isMissingNode()) {
+            return new EncryptionPreferences(null, null);
+        }
+        return new EncryptionPreferences(
+                firstSupported(walletMeta.get("request_object_encryption_alg_values_supported")),
+                firstSupported(walletMeta.get("request_object_encryption_enc_values_supported"))
+        );
+    }
+
+    private String firstSupported(JsonNode node) {
+        if (node != null && node.isArray() && node.size() > 0 && node.get(0).isTextual()) {
+            return node.get(0).asText();
+        }
+        return null;
+    }
+
+    private EncryptionResult encryptRequestObject(String payload, JWK key, String algOverride, String encOverride) {
+        if (key == null || payload == null || payload.isBlank()) {
+            return new EncryptionResult(payload, false, null, null);
+        }
+        try {
+            JWEAlgorithm alg = algOverride != null && !algOverride.isBlank()
+                    ? JWEAlgorithm.parse(algOverride)
+                    : (key instanceof RSAKey ? JWEAlgorithm.RSA_OAEP_256 : JWEAlgorithm.ECDH_ES_A256KW);
+            EncryptionMethod enc = encOverride != null && !encOverride.isBlank()
+                    ? EncryptionMethod.parse(encOverride)
+                    : EncryptionMethod.A256GCM;
+            com.nimbusds.jose.JWEObject jwe = new com.nimbusds.jose.JWEObject(
+                    new com.nimbusds.jose.JWEHeader.Builder(alg, enc).keyID(key.getKeyID()).build(),
+                    new com.nimbusds.jose.Payload(payload)
+            );
+            if (key instanceof RSAKey rsaKey) {
+                jwe.encrypt(new com.nimbusds.jose.crypto.RSAEncrypter(rsaKey.toRSAPublicKey()));
+            } else if (key instanceof ECKey ecKey) {
+                jwe.encrypt(new com.nimbusds.jose.crypto.ECDHEncrypter(ecKey.toECPublicKey()));
+            } else {
+                return new EncryptionResult(payload, false, null, null);
+            }
+            return new EncryptionResult(jwe.serialize(), true, alg.getName(), enc.getName());
+        } catch (Exception e) {
+            return new EncryptionResult(payload, false, null, null);
+        }
+    }
+
+    private String buildDecodedForLog(String signedPayload, EncryptionResult encryption) {
+        if (signedPayload == null || signedPayload.isBlank()) {
+            return "";
+        }
+        if (encryption != null && encryption.encrypted()) {
+            String decodedSigned = tokenViewService.decodeJwtLike(signedPayload);
+            StringBuilder sb = new StringBuilder("Encrypted request object");
+            if (encryption.alg() != null || encryption.enc() != null) {
+                sb.append(" (");
+                if (encryption.alg() != null && !encryption.alg().isBlank()) {
+                    sb.append(encryption.alg());
+                }
+                if (encryption.enc() != null && !encryption.enc().isBlank()) {
+                    if (encryption.alg() != null && !encryption.alg().isBlank()) {
+                        sb.append("/");
+                    }
+                    sb.append(encryption.enc());
+                }
+                sb.append(")");
+            }
+            if (decodedSigned != null && !decodedSigned.isBlank()) {
+                sb.append("\n\n").append(decodedSigned);
+            }
+            return sb.toString();
+        }
+        return tokenViewService.decodeJwtLike(signedPayload);
+    }
+
+    private String walletRequestLog(String walletMetadata, String walletNonce) {
+        StringBuilder sb = new StringBuilder();
+        if (walletMetadata != null && !walletMetadata.isBlank()) {
+            sb.append("wallet_metadata=").append(walletMetadata);
+        }
+        if (walletNonce != null && !walletNonce.isBlank()) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append("wallet_nonce=").append(walletNonce);
+        }
+        return sb.toString();
+    }
+
+    private String extractState(com.nimbusds.jwt.JWTClaimsSet claims) {
+        if (claims == null) {
+            return "unknown";
+        }
+        try {
+            String state = claims.getStringClaim("state");
+            return state != null && !state.isBlank() ? state : "unknown";
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
+    private RequestObjectService.SigningRequest determineSigningRequest(JsonNode walletMeta) {
+        if (walletMeta == null || walletMeta.isMissingNode()) {
+            return null;
+        }
+        String alg = firstSupported(walletMeta.get("request_object_signing_alg_values_supported"));
+        if (alg == null || alg.isBlank()) {
+            return null;
+        }
+        try {
+            JWSAlgorithm jwsAlg = JWSAlgorithm.parse(alg);
+            JWK jwk = null;
+            if (alg.toUpperCase().startsWith("RS")) {
+                jwk = verifierKeyService.loadOrCreateSigningKey();
+            } else if (alg.toUpperCase().startsWith("ES")) {
+                jwk = new ECKeyGenerator(Curve.P_256)
+                        .keyUse(KeyUse.SIGNATURE)
+                        .algorithm(jwsAlg)
+                        .keyIDFromThumbprint(true)
+                        .generate();
+            }
+            return new RequestObjectService.SigningRequest(jwsAlg, jwk);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private record EncryptionPreferences(String alg, String enc) {
+    }
+
+    private record EncryptionResult(String payload, boolean encrypted, String alg, String enc) {
     }
 
     private UriComponentsBuilder baseUri(HttpServletRequest request) {
