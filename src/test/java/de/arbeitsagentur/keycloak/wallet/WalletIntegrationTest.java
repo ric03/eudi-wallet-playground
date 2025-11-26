@@ -1002,6 +1002,68 @@ class WalletIntegrationTest {
         }
     }
 
+    @Test
+    void usernameDisplayedInsteadOfSubjectOnWalletAndConsent() throws Exception {
+        URI base = URI.create("http://localhost:" + serverPort);
+        BasicCookieStore cookieStore = new BasicCookieStore();
+        HttpClientContext context = HttpClientContext.create();
+        context.setCookieStore(cookieStore);
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setRedirectsEnabled(false)
+                .setCookieSpec(StandardCookieSpec.RELAXED)
+                .build();
+        try (CloseableHttpClient client = HttpClients.custom()
+                .setDefaultCookieStore(cookieStore)
+                .setDefaultRequestConfig(requestConfig)
+                .build()) {
+            authenticateThroughLogin(client, context, base);
+            String sub;
+            String username;
+            try (CloseableHttpResponse sessionResponse = client.execute(new HttpGet(base.resolve("/api/session")), context)) {
+                JsonNode sessionJson = objectMapper.readTree(sessionResponse.getEntity().getContent());
+                JsonNode user = sessionJson.path("user");
+                sub = user.path("sub").asText();
+                username = firstNonBlank(
+                        user.path("preferred_username").asText(null),
+                        user.path("name").asText(null),
+                        user.path("email").asText(null),
+                        user.path("sub").asText("test")
+                );
+            }
+
+            HtmlPage walletPage = fetchHtmlFollowingRedirects(client, context, base);
+            Element walletName = walletPage.document().selectFirst(".user-chip .name");
+            assertThat(walletName).isNotNull();
+            assertThat(walletName.text()).isEqualTo("test");
+            if (sub != null && !sub.isBlank()) {
+                assertThat(walletName.text()).doesNotContain(sub);
+            }
+
+            try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/issue")), context)) {
+                assertThat(issueResponse.getCode()).isEqualTo(200);
+            }
+            String dcql = fetchDefaultDcqlQuery(client, context, base);
+            URI walletAuth = startPresentationRequest(client, context, base, dcql, List.of("given_name"), null,
+                    null, null, null, null, null);
+            HtmlPage consentPage = fetchHtmlFollowingRedirects(client, context, walletAuth);
+            Element consentName = consentPage.document().selectFirst(".user-chip .name");
+            assertThat(consentName).isNotNull();
+            assertThat(consentName.text()).isEqualTo("test");
+            if (sub != null && !sub.isBlank()) {
+                assertThat(consentName.text()).doesNotContain(sub);
+            }
+
+            // Complete the flow to keep the test environment consistent.
+            PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
+                    List.of("given_name"), null, false, Map.of(), null);
+            HttpPost callbackPost = new HttpPost(form.action());
+            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
+            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
+                assertThat(verifierResult.getCode()).isEqualTo(200);
+            }
+        }
+    }
+
     private void authenticateThroughLogin(CloseableHttpClient client, HttpClientContext context, URI base) throws Exception {
         for (int attempt = 0; attempt < 2; attempt++) {
             HttpGet startLogin = new HttpGet(base.resolve("/auth/login"));
@@ -1484,6 +1546,15 @@ class WalletIntegrationTest {
     }
 
     private record SelfSignedMaterial(String certificatePem, String keyPem, String combinedPem, String hash) {
+    }
+
+    private String firstNonBlank(String... candidates) {
+        for (String c : candidates) {
+            if (c != null && !c.isBlank()) {
+                return c;
+            }
+        }
+        return "";
     }
 
 }

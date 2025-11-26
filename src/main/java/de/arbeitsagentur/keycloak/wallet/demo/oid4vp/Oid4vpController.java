@@ -261,7 +261,7 @@ public class Oid4vpController {
         }
         mv.addObject("candidateVcts", candidateVcts);
         if (walletSession.getUserProfile() != null) {
-            mv.addObject("userName", walletSession.getUserProfile().name());
+            mv.addObject("userName", walletSession.getUserProfile().displayName());
             mv.addObject("userEmail", walletSession.getUserProfile().email());
         }
         return mv;
