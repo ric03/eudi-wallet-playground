@@ -12,6 +12,8 @@ name: release-please
 
 jobs:
   release-please:
+    # Run only for the ba-itsys organization
+    if: github.repository_owner == 'ba-itsys'
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4

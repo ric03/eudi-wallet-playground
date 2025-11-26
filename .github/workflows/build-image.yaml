@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-and-push-image:
-    # Only build and push images from the ba-itsys organization
+    # Run only for the ba-itsys organization
     if: github.repository_owner == 'ba-itsys'
     runs-on: ubuntu-latest
     steps:
