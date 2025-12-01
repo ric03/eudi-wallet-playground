@@ -1,7 +1,7 @@
 # EUDI Wallet Keycloak Demo
 
 Spring Boot demo/mock of an EUDI wallet that authenticates against Keycloak 26.4.5 (with `oid4vc-vci` enabled), requests an SD-JWT credential through OID4VCI, and stores the credential (signed SD-JWT + disclosures) on the filesystem.  
-It also exposes an OID4VP 1.0 “same device” presentation endpoint and a verifier UI that use DCQL (`dcql_query`) instead of legacy presentation definitions or `presentation_submission`. SD-JWT presentations are validated against a trust list containing the Keycloak realm certificate.  
+It also exposes an OID4VP 1.0 “same device” presentation endpoint and a verifier UI that use DCQL (`dcql_query`) instead of legacy presentation definitions. SD-JWT presentations are validated against a trust list containing the Keycloak realm certificate.  
 The verifier can be pointed at any external wallet that implements the OID4VP 1.0/DCQL profile (for example a sandbox or a real mobile wallet) by switching `VERIFIER_WALLET_AUTH_ENDPOINT`.  
 Integration tests spin up Keycloak in a Testcontainer and exercise the complete issuance + presentation flow end-to-end, using Keycloak as the reference credential issuer.
 
@@ -90,7 +90,7 @@ sequenceDiagram
    - `state` and `nonce` (fresh per request)
    - `dcql_query` (pasted into the verifier UI or provided via `DEFAULT_DCQL_QUERY` / `DCQL_QUERY_FILE`)
 2. **Wallet Authorization Endpoint** – If `VERIFIER_WALLET_AUTH_ENDPOINT` is unset, the request targets the built-in wallet (`/oid4vp/auth`). Otherwise, the same request is sent to the external wallet you configured.
-3. **Wallet Response** – The wallet evaluates the DCQL query against its credential store, selects matching SD-JWT credentials, and posts them back as the `vp_token` JSON object (`{ "<credential-id>": ["<dc+sd-jwt>", ...] }`) alongside `state`/`nonce`. DCQL already binds credentials to request IDs, so no `presentation_submission` is required.
+3. **Wallet Response** – The wallet evaluates the DCQL query against its credential store, selects matching SD-JWT credentials, and posts them back as the `vp_token` JSON object (`{ "<credential-id>": ["<dc+sd-jwt>", ...] }`) alongside `state`/`nonce`. DCQL already binds credentials to request IDs.
 4. **Verification** – `/verifier/callback` verifies `state`/`nonce`, validates the SD-JWT signature against the configured trust list (`src/main/resources/trust-list.json`), and recomputes the disclosure digests. Only issuers listed in the trust list (Keycloak by default) are accepted.
 
 ### Pointing the verifier at an external wallet
