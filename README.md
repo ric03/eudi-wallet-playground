@@ -201,3 +201,15 @@ Always run the tests after you modify the codebase (see `AGENTS.md`). The test p
 - `src/main/java` – Spring Boot application (wallet controllers, OIDC helpers, credential issuer client, verifier, OID4VP handler)
 - `src/main/resources/templates` – Thymeleaf templates for wallet, verifier, and OID4VP submission
 - `src/test/java/de/arbeitsagentur/keycloak/wallet/WalletIntegrationTest.java` – Testcontainers-based system test
+
+## Deploying to Kubernetes (AWS/EKS)
+
+Use the bundled Helm chart under `charts/eudi-wallet-demo` to deploy Keycloak (with the realm import) and the Spring Boot wallet to Kubernetes. The defaults provision NLB-backed services; enable the optional ALB ingress entries if you terminate TLS there.
+
+```bash
+helm install wallet charts/eudi-wallet-demo \
+  --set wallet.image.repository=ghcr.io/ba-itsys/eudi-wallet-playground \
+  --set wallet.image.tag=1.0.0
+```
+
+See `charts/eudi-wallet-demo/README.md` for full value options (database, storage classes, hostnames, and mock-issuer/verifier overrides).

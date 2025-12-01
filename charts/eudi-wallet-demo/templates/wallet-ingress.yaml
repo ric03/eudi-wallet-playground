@@ -1,0 +1,36 @@
+{{- if and .Values.wallet.enabled .Values.wallet.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "eudi-wallet-demo.fullname" . }}-wallet
+  labels:
+    app.kubernetes.io/component: wallet
+    {{- include "eudi-wallet-demo.labels" . | nindent 4 }}
+  {{- with .Values.wallet.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.wallet.ingress.className }}
+  ingressClassName: {{ .Values.wallet.ingress.className }}
+  {{- end }}
+  rules:
+    {{- range .Values.wallet.ingress.hosts }}
+    - host: {{ .host }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "eudi-wallet-demo.fullname" $ }}-wallet
+                port:
+                  number: {{ $.Values.wallet.service.port }}
+          {{- end }}
+    {{- end }}
+  {{- if .Values.wallet.ingress.tls }}
+  tls:
+    {{- toYaml .Values.wallet.ingress.tls | nindent 4 }}
+  {{- end }}
+{{- end }}

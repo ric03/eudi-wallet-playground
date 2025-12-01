@@ -63,7 +63,9 @@ class MockIssuerIntegrationTest {
 
         @SuppressWarnings("unchecked")
         var created = restTemplate.postForEntity(baseUrl("/mock-issuer/configurations"), payload, Map.class);
-        assertThat(created.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(created.getStatusCode().is2xxSuccessful())
+                .withFailMessage("POST /mock-issuer/configurations returned %s with body %s", created.getStatusCode(), created.getBody())
+                .isTrue();
         Map<String, Object> createdBody = (Map<String, Object>) created.getBody();
         assertThat(createdBody).isNotNull();
         assertThat(createdBody).containsEntry("id", "integration-credential");
