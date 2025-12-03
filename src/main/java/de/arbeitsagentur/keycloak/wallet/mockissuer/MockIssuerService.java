@@ -1,19 +1,12 @@
 package de.arbeitsagentur.keycloak.wallet.mockissuer;
 
-import com.authlete.sd.Disclosure;
-import com.authlete.sd.SDObjectBuilder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.nimbusds.jose.JOSEException;
-import com.nimbusds.jose.JOSEObjectType;
-import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.jwk.JWK;
-import com.nimbusds.jose.jwk.ECKey;
-import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
-import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils;
+import de.arbeitsagentur.keycloak.wallet.common.credential.CredentialBuildResult;
+import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocCredentialBuilder;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtCredentialBuilder;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.config.MockIssuerConfigurationStore;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.config.MockIssuerProperties;
 import org.springframework.stereotype.Service;
@@ -27,6 +20,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -46,7 +40,8 @@ import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 public class MockIssuerService {
     private final MockIssuerProperties properties;
     private final ObjectMapper objectMapper;
-    private final MockIssuerKeyService keyService;
+    private final SdJwtCredentialBuilder sdJwtCredentialBuilder;
+    private final MdocCredentialBuilder mdocCredentialBuilder;
     private final MockIssuerConfigurationStore configurationStore;
     private final Map<String, OfferState> offers = new ConcurrentHashMap<>();
     private final Map<String, AccessTokenState> accessTokens = new ConcurrentHashMap<>();
@@ -57,8 +52,9 @@ public class MockIssuerService {
                              MockIssuerConfigurationStore configurationStore) {
         this.properties = properties;
         this.objectMapper = objectMapper;
-        this.keyService = keyService;
         this.configurationStore = configurationStore;
+        this.sdJwtCredentialBuilder = new SdJwtCredentialBuilder(objectMapper, keyService, properties);
+        this.mdocCredentialBuilder = new MdocCredentialBuilder(keyService, properties);
     }
 
     public OfferResult createOffer(BuilderRequest request, String issuer) {
@@ -166,8 +162,8 @@ public class MockIssuerService {
                 .map(Object::toString)
                 .filter(StringUtils::hasText)
                 .orElse(state.offer().format());
-        if (!"dc+sd-jwt".equalsIgnoreCase(format)) {
-            throw new ResponseStatusException(BAD_REQUEST, "Only dc+sd-jwt is supported right now");
+        if (!supportsFormat(format)) {
+            throw new ResponseStatusException(BAD_REQUEST, "Unsupported format: " + format);
         }
         String credentialConfigurationId = Optional.ofNullable(request.get("credential_configuration_id"))
                 .map(Object::toString)
@@ -177,13 +173,13 @@ public class MockIssuerService {
             throw new ResponseStatusException(BAD_REQUEST, "credential_configuration_id mismatch");
         }
         ProofValidation validation = validateProof(request, state, issuer);
-        BuildResult built = buildSdJwt(state.offer(), issuer, validation.cnf());
+        CredentialBuildResult built = buildCredential(format, state.offer(), issuer, validation.cnf());
         String nextNonce = newNonceValue();
         accessTokens.put(token, state.withNewNonce(nextNonce, Instant.now().plus(properties.credentialTtl())));
 
         Map<String, Object> credential = new LinkedHashMap<>();
-        credential.put("format", "dc+sd-jwt");
-        credential.put("credential", built.sdJwt());
+        credential.put("format", built.format());
+        credential.put("credential", built.encoded());
         credential.put("credential_configuration_id", credentialConfigurationId);
         credential.put("vct", built.vct());
         if (!built.disclosures().isEmpty()) {
@@ -194,7 +190,7 @@ public class MockIssuerService {
         body.put("credentials", List.of(credential));
         body.put("c_nonce", nextNonce);
         body.put("c_nonce_expires_in", (int) properties.credentialTtl().toSeconds());
-        return new CredentialResult(body, built.decoded(), built.sdJwt());
+        return new CredentialResult(body, built.decoded(), built.encoded());
     }
 
     public Map<String, Object> credentialOfferPayload(OfferState state) {
@@ -309,62 +305,23 @@ public class MockIssuerService {
     }
 
     private PreviewResult preview(OfferState state) {
-        BuildResult built = buildSdJwt(state, state.issuer(), null);
-        return new PreviewResult(state.configurationId(), state.format(), state.vct(), built.sdJwt(), built.decoded());
+        CredentialBuildResult built = buildCredential(state.format(), state, state.issuer(), null);
+        return new PreviewResult(state.configurationId(), state.format(), state.vct(), built.encoded(), built.decoded());
     }
 
-    private BuildResult buildSdJwt(OfferState offer, String issuer, JsonNode cnf) {
-        try {
-            SDObjectBuilder builder = new SDObjectBuilder();
-            List<Disclosure> disclosures = new ArrayList<>();
-            for (Map.Entry<String, Object> entry : offer.claims().entrySet()) {
-                Disclosure disclosure = builder.putSDClaim(entry.getKey(), entry.getValue());
-                if (disclosure != null) {
-                    disclosures.add(disclosure);
-                }
-            }
-            Map<String, Object> payload = builder.build();
-            payload.put("vct", offer.vct());
-            payload.put("iss", issuer);
-            payload.put("iat", Instant.now().getEpochSecond());
-            payload.put("exp", Instant.now().plus(properties.credentialTtl()).getEpochSecond());
-            if (cnf != null) {
-                payload.put("cnf", objectMapper.convertValue(cnf, Map.class));
-            }
-            SignedJWT jwt = sign(payload);
-            String sdJwt = new com.authlete.sd.SDJWT(jwt.serialize(), disclosures, null).toString();
-            Map<String, Object> disclosed = SdJwtUtils.extractDisclosedClaims(SdJwtUtils.split(sdJwt), objectMapper);
-            Map<String, Object> decoded = new LinkedHashMap<>();
-            decoded.put("iss", issuer);
-            decoded.put("credential_configuration_id", offer.configurationId());
-            decoded.put("vct", offer.vct());
-            decoded.put("iat", payload.get("iat"));
-            decoded.put("exp", payload.get("exp"));
-            if (cnf != null) {
-                decoded.put("cnf", objectMapper.convertValue(cnf, Map.class));
-            }
-            decoded.put("claims", disclosed);
-            return new BuildResult(sdJwt, disclosures.stream().map(Disclosure::getDisclosure).toList(), decoded, offer.vct());
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to build SD-JWT", e);
+    private CredentialBuildResult buildCredential(String format, OfferState offer, String issuer, JsonNode cnf) {
+        if ("mso_mdoc".equalsIgnoreCase(format)) {
+            return buildMdoc(offer, issuer, cnf);
         }
+        return buildSdJwt(offer, issuer, cnf);
     }
 
-    private SignedJWT sign(Map<String, Object> claims) throws JOSEException {
-        ECKey key = keyService.signingKey();
-        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.ES256)
-                .keyID(Optional.ofNullable(key.getKeyID()).orElse("mock-issuer-es256"))
-                .type(JOSEObjectType.JWT)
-                .build();
-        JWTClaimsSet.Builder claimsBuilder = new JWTClaimsSet.Builder();
-        for (Map.Entry<String, Object> entry : claims.entrySet()) {
-            if (entry.getValue() != null) {
-                claimsBuilder.claim(entry.getKey(), entry.getValue());
-            }
-        }
-        SignedJWT jwt = new SignedJWT(header, claimsBuilder.build());
-        jwt.sign(new ECDSASigner(key));
-        return jwt;
+    private CredentialBuildResult buildSdJwt(OfferState offer, String issuer, JsonNode cnf) {
+        return sdJwtCredentialBuilder.build(offer.configurationId(), offer.vct(), issuer, offer.claims(), cnf);
+    }
+
+    private CredentialBuildResult buildMdoc(OfferState offer, String issuer, JsonNode cnf) {
+        return mdocCredentialBuilder.build(offer.configurationId(), offer.vct(), issuer, offer.claims(), cnf);
     }
 
     private ProofValidation validateProof(Map<String, Object> request, AccessTokenState state, String issuer) {
@@ -454,7 +411,7 @@ public class MockIssuerService {
     }
 
     private boolean supportsFormat(String format) {
-        return "dc+sd-jwt".equalsIgnoreCase(format);
+        return "dc+sd-jwt".equalsIgnoreCase(format) || "mso_mdoc".equalsIgnoreCase(format);
     }
 
     public record BuilderRequest(String configurationId, String format, String vct, List<ClaimInput> claims) {
@@ -502,9 +459,6 @@ public class MockIssuerService {
         AccessTokenState withNewNonce(String newNonce, Instant newExpiry) {
             return new AccessTokenState(accessToken, offer, newNonce, newExpiry);
         }
-    }
-
-    private record BuildResult(String sdJwt, List<String> disclosures, Map<String, Object> decoded, String vct) {
     }
 
     private record ProofValidation(JsonNode cnf) {

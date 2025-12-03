@@ -53,7 +53,7 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: SERVER_SERVLET_CONTEXT_PATH
-              value: {{ .Values.wallet.basePath }}
+              value: /wallet
             - name: SERVER_FORWARD_HEADERS_STRATEGY
               value: "framework"
             - name: WALLET_PUBLIC_BASE_URL
@@ -104,13 +104,13 @@ spec:
               name: http
           readinessProbe:
             httpGet:
-              path: {{ .Values.wallet.healthPath }}
+              path: /wallet
               port: http
             initialDelaySeconds: 15
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: {{ .Values.wallet.healthPath }}
+              path: /wallet
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20

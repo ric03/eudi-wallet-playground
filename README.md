@@ -5,6 +5,36 @@ It also exposes an OID4VP 1.0 “same device” presentation endpoint and a veri
 The verifier can be pointed at any external wallet that implements the OID4VP 1.0/DCQL profile (for example a sandbox or a real mobile wallet) by switching `VERIFIER_WALLET_AUTH_ENDPOINT`.  
 Integration tests spin up Keycloak in a Testcontainer and exercise the complete issuance + presentation flow end-to-end, using Keycloak as the reference credential issuer.
 
+## Credential formats: SD-JWT vs mDoc
+
+- **SD-JWT (`dc+sd-jwt`)** – A signed JWT whose payload omits selectively disclosable claims. Each omitted claim is carried in a Base64URL disclosure, and the presentation concatenates the signed JWT and disclosures with `~`. Verifiers recompute digests to ensure disclosures belong to the signed credential.
+- **mDoc (`mso_mdoc`)** – A Mobile Security Object (MSO) defined in ISO/IEC 18013‑5, CBOR-encoded and COSE_Sign1-signed. Claims are “data elements” grouped under `issuerSigned.nameSpaces.<docType>`. The MSO holds SHA-256 digests of each data element and validity info; the COSE signature binds those digests.
+- **Encoding** – mDoc containers are CBOR; they can be represented as binary, base16 (hex), or base64url. SD-JWT remains pure JSON/JWT with disclosures as Base64URL strings.
+- **Examples**
+  - SD-JWT (conceptual):
+    ```
+    <signed-jwt>~<disclosure1>~<disclosure2>
+    ```
+    The JWT payload includes hashes of the disclosed values; verifiers check the signature, then confirm each disclosure hash matches.
+  - mDoc (conceptual CBOR/COSE):
+    ```
+    {
+      "version": "1.0",
+      "documents": [{
+        "docType": "org.iso.18013.5.1.mDL",
+        "issuerSigned": {
+          "nameSpaces": {
+            "org.iso.18013.5.1": [
+              { "digestID": 0, "elementIdentifier": "given_name", "elementValue": "Alice" }
+            ]
+          },
+          "issuerAuth": "COSE_Sign1(...)"
+        }
+      }]
+    }
+    ```
+    Decoding `issuerAuth` reveals the MSO with `valueDigests` and `validityInfo`, which the COSE signature protects.
+
  ## Prerequisites
 
  - Java 21+

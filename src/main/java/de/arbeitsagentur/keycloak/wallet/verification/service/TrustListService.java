@@ -22,6 +22,7 @@ import java.util.*;
 public class TrustListService {
     private final ObjectMapper objectMapper;
     private final Map<String, List<TrustedVerifier>> trustLists = new LinkedHashMap<>();
+    private final Map<String, List<PublicKey>> trustListKeys = new LinkedHashMap<>();
     private String defaultTrustListId;
     private final Map<String, String> labels = new LinkedHashMap<>();
 
@@ -40,16 +41,20 @@ public class TrustListService {
                 node = objectMapper.readTree(is);
             }
             List<TrustedVerifier> verifiers = new ArrayList<>();
+            List<PublicKey> keys = new ArrayList<>();
             for (JsonNode issuer : node.path("issuers")) {
                 String certPem = issuer.path("certificate").asText();
                 PublicKey publicKey = parsePublicKey(certPem);
                 if (publicKey instanceof RSAPublicKey rsaPublicKey) {
                     verifiers.add(new TrustedVerifier(JWSAlgorithm.RS256, new RSASSAVerifier(rsaPublicKey)));
+                    keys.add(rsaPublicKey);
                 } else if (publicKey instanceof ECPublicKey ecPublicKey) {
                     verifiers.add(new TrustedVerifier(JWSAlgorithm.ES256, new ECDSAVerifier(ecPublicKey)));
+                    keys.add(ecPublicKey);
                 }
             }
             trustLists.put(id, verifiers);
+            trustListKeys.put(id, List.copyOf(keys));
             String label = node.path("label").asText(null);
             labels.put(id, (label == null || label.isBlank()) ? id : label);
             if (defaultTrustListId == null) {
@@ -120,6 +125,13 @@ public class TrustListService {
 
     public String defaultTrustListId() {
         return defaultTrustListId;
+    }
+
+    public List<PublicKey> publicKeys(String trustListId) {
+        return trustListKeys.getOrDefault(
+                trustListId != null ? trustListId : defaultTrustListId,
+                trustListKeys.getOrDefault(defaultTrustListId, List.of())
+        );
     }
 
     public static boolean verifyWithKey(SignedJWT jwt, java.security.PublicKey key) {

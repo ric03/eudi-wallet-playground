@@ -30,17 +30,19 @@ public record MockIssuerProperties(
             configurationFile = Path.of("config/mock-issuer-configurations.json");
         }
         if (configurations == null || configurations.isEmpty()) {
+            List<ClaimTemplate> defaultPidClaims = List.of(
+                    new ClaimTemplate("given_name", "Given name", "Alice", true),
+                    new ClaimTemplate("family_name", "Family name", "Holder", true),
+                    new ClaimTemplate("birthdate", "Birthdate", "1990-01-01", true),
+                    new ClaimTemplate("address.country", "Country", "DE", true),
+                    new ClaimTemplate("document_number", "Document number", "DOC-MOCK-1234", true),
+                    new ClaimTemplate("nationalities", "Nationalities", "[\"DE\"]", false)
+            );
             configurations = List.of(
                     new CredentialConfiguration("mock-pid-sdjwt", "dc+sd-jwt", "mock-identity-credential", "Mock PID (SD-JWT)", "urn:example:pid:mock",
-                            List.of(
-                                    new ClaimTemplate("given_name", "Given name", "Alice", true),
-                                    new ClaimTemplate("family_name", "Family name", "Holder", true),
-                                    new ClaimTemplate("birthdate", "Birthdate", "1990-01-01", true),
-                                    new ClaimTemplate("address.country", "Country", "DE", true),
-                                    new ClaimTemplate("document_number", "Document number", "DOC-MOCK-1234", true),
-                                    new ClaimTemplate("nationalities", "Nationalities", "[\"DE\"]", false)
-                            )),
-                    new CredentialConfiguration("mock-pid-mdoc", "mso_mdoc", "mock-identity-mdoc", "Mock PID (mDoc)", "urn:example:pid:mock", List.of())
+                            defaultPidClaims),
+                    new CredentialConfiguration("mock-pid-mdoc", "mso_mdoc", "mock-identity-mdoc", "Mock PID (mDoc)", "urn:example:pid:mock",
+                            defaultPidClaims)
             );
         }
     }

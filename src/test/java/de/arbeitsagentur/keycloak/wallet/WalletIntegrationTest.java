@@ -45,6 +45,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 import com.nimbusds.jwt.SignedJWT;
+import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocParser;
 import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.demo.oid4vp.PresentationService;
@@ -220,6 +221,90 @@ class WalletIntegrationTest {
                 assertThat(tamperedResponse.getCode()).isEqualTo(400);
                 String body = new String(tamperedResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
                 assertThat(body).contains("Invalid verifier session");
+            }
+        }
+    }
+
+    @Test
+    void mdocCredentialSelectableAndVerifiedViaUi() throws Exception {
+        URI base = URI.create("http://localhost:" + serverPort);
+        BasicCookieStore cookieStore = new BasicCookieStore();
+        HttpClientContext context = HttpClientContext.create();
+        context.setCookieStore(cookieStore);
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setRedirectsEnabled(false)
+                .setCookieSpec(StandardCookieSpec.RELAXED)
+                .build();
+        try (CloseableHttpClient client = HttpClients.custom()
+                .setDefaultCookieStore(cookieStore)
+                .setDefaultRequestConfig(requestConfig)
+                .build()) {
+            authenticateThroughLogin(client, context, base);
+
+            HttpPost mockIssue = new HttpPost(base.resolve("/api/mock-issue"));
+            mockIssue.setEntity(new UrlEncodedFormEntity(
+                    List.of(new BasicNameValuePair("configurationId", "mock-pid-mdoc")),
+                    StandardCharsets.UTF_8));
+            try (CloseableHttpResponse issueResponse = client.execute(mockIssue, context)) {
+                assertThat(issueResponse.getCode()).isEqualTo(200);
+            }
+
+            String dcql = """
+                    {
+                      "credentials": [{
+                        "id": "mdoc-proof",
+                        "format": "mso_mdoc",
+                        "claims": [
+                          { "path": ["given_name"] },
+                          { "path": ["document_number"] }
+                        ]
+                      }]
+                    }
+                    """;
+            PresentationForm presentationForm = initiatePresentationFlowWithTrustList(
+                    client,
+                    context,
+                    base,
+                    dcql,
+                    "accept",
+                    List.of("given_name", "document_number"),
+                    List.of("family_name"),
+                    null,
+                    false,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    Map.of(),
+                    "urn:example:pid:mock",
+                    null,
+                    "trust-list-mock");
+
+            String vpTokenValue = presentationForm.fields().get("vp_token");
+            assertThat(vpTokenValue).isNotBlank();
+            JsonNode vpTokenJson = objectMapper.readTree(vpTokenValue);
+            Map.Entry<String, JsonNode> first = vpTokenJson.fields().next();
+            JsonNode tokenNode = first.getValue();
+            String outerToken = tokenNode.isArray() ? tokenNode.get(0).asText() : tokenNode.asText();
+            String innerMdoc = SignedJWT.parse(outerToken).getJWTClaimsSet().getStringClaim("vp_token");
+            MdocParser parser = new MdocParser();
+            Map<String, Object> claims = parser.extractClaims(innerMdoc);
+            assertThat(claims)
+                    .containsEntry("given_name", "Alice")
+                    .containsKey("document_number")
+                    .doesNotContainKey("family_name");
+            assertThat(parser.extractDocType(innerMdoc)).isEqualTo("urn:example:pid:mock");
+
+            HttpPost callbackPost = new HttpPost(presentationForm.action());
+            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(presentationForm.fields()), StandardCharsets.UTF_8));
+            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
+                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
+                assertThat(verifierResult.getCode())
+                        .withFailMessage("Verifier callback failed. Status %s Body:%n%s", verifierResult.getCode(), body)
+                        .isEqualTo(200);
+                assertThat(body).contains("Verified credential");
+                assertThat(body).contains("presentation_1");
             }
         }
     }

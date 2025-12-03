@@ -53,6 +53,7 @@ import java.util.Optional;
 import java.security.MessageDigest;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtParser;
 
 @Controller
 public class Oid4vpController {
@@ -63,6 +64,7 @@ public class Oid4vpController {
     private final DebugLogService debugLogService;
     private final SessionService sessionService;
     private final RestTemplate restTemplate;
+    private final SdJwtParser sdJwtParser;
     private static final String SESSION_REQUEST = "oid4vp_request";
     private static final String POST_LOGIN_REDIRECT = "postLoginRedirect";
 
@@ -80,6 +82,7 @@ public class Oid4vpController {
         this.debugLogService = debugLogService;
         this.sessionService = sessionService;
         this.restTemplate = restTemplate;
+        this.sdJwtParser = new SdJwtParser(objectMapper);
     }
 
     @GetMapping("/oid4vp/auth")
@@ -572,8 +575,8 @@ public class Oid4vpController {
             return "";
         }
         try {
-            if (token.contains("~")) {
-                token = token.split("~")[0];
+            if (sdJwtParser.isSdJwt(token)) {
+                token = sdJwtParser.signedJwt(token);
             }
             if (!token.contains(".")) {
                 return "";

@@ -2,10 +2,11 @@ package de.arbeitsagentur.keycloak.wallet.demo.oid4vp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.authlete.sd.Disclosure;
-import com.authlete.sd.SDJWT;
-import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtParser;
+import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocParser;
+import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocSelectiveDiscloser;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtSelectiveDiscloser;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.PathNotFoundException;
 import org.springframework.stereotype.Service;
@@ -24,10 +25,18 @@ import java.util.stream.Collectors;
 public class PresentationService {
     private final CredentialStore credentialStore;
     private final ObjectMapper objectMapper;
+    private final SdJwtParser sdJwtParser;
+    private final MdocParser mdocParser;
+    private final MdocSelectiveDiscloser mdocSelectiveDiscloser;
+    private final SdJwtSelectiveDiscloser sdJwtSelectiveDiscloser;
 
     public PresentationService(CredentialStore credentialStore, ObjectMapper objectMapper) {
         this.credentialStore = credentialStore;
         this.objectMapper = objectMapper;
+        this.sdJwtParser = new SdJwtParser(objectMapper);
+        this.mdocParser = new MdocParser();
+        this.mdocSelectiveDiscloser = new MdocSelectiveDiscloser();
+        this.sdJwtSelectiveDiscloser = new SdJwtSelectiveDiscloser(sdJwtParser);
     }
 
     public Optional<Presentation> findPresentation(String userId, String dcqlQuery) {
@@ -181,10 +190,11 @@ public class PresentationService {
 
     private boolean matchesFormat(CredentialRequest definition, String format) {
         if (definition.format() == null || definition.format().isBlank()) {
-            return true;
+            // Only allow mdoc when explicitly requested to avoid mixing formats unintentionally.
+            return format == null || !format.equalsIgnoreCase("mso_mdoc");
         }
         if (format == null || format.isBlank()) {
-            return true;
+            return false;
         }
         if (definition.format().equalsIgnoreCase(format)) {
             return true;
@@ -499,42 +509,18 @@ public class PresentationService {
         if (!(raw instanceof String rawCredential) || rawCredential.isBlank()) {
             return credential.toString();
         }
-        if (rawCredential.contains("~")) {
-            return rebuildSdJwt(rawCredential, requests, requestedClaims);
+        if (sdJwtParser.isSdJwt(rawCredential)) {
+            return sdJwtSelectiveDiscloser.filter(rawCredential, toSdJwtRequests(requests), requestedClaims);
         }
-        List<String> disclosures = filterDisclosures(credential, requests, requestedClaims);
+        if (mdocParser.isHex(rawCredential)) {
+            return mdocSelectiveDiscloser.filter(rawCredential, requestedClaims);
+        }
+        List<String> disclosures = sdJwtSelectiveDiscloser.filterDisclosures(
+                filterDisclosuresFromCredential(credential), toSdJwtRequests(requests), requestedClaims);
         if (disclosures.isEmpty()) {
             return rawCredential;
         }
-        StringBuilder sb = new StringBuilder(rawCredential);
-        for (String disclosure : disclosures) {
-            if (disclosure != null && !disclosure.isBlank()) {
-                sb.append('~').append(disclosure);
-            }
-        }
-        return sb.toString();
-    }
-
-    private String rebuildSdJwt(String sdJwt, List<ClaimRequest> requests, Set<String> requestedClaims) {
-        try {
-            SDJWT parsed = SDJWT.parse(sdJwt);
-            List<Disclosure> filtered = parsed.getDisclosures().stream()
-                    .filter(d -> {
-                        if (requestedClaims == null || requestedClaims.isEmpty()) {
-                            return true;
-                        }
-                        String claimName = d.getClaimName();
-                        if (claimName == null) {
-                            return false;
-                        }
-                        return requestedClaims.contains(claimName)
-                                || requests.stream().anyMatch(r -> matchesClaimName(r, claimName));
-                    })
-                    .toList();
-            return new SDJWT(parsed.getCredentialJwt(), filtered, parsed.getBindingJwt()).toString();
-        } catch (Exception e) {
-            return sdJwt;
-        }
+        return sdJwtParser.withDisclosures(rawCredential, disclosures);
     }
 
     public record Presentation(String vpToken, Map<String, Object> credential) {
@@ -582,7 +568,7 @@ public class PresentationService {
         }
     }
 
-    private List<String> filterDisclosures(Map<String, Object> credential, List<ClaimRequest> requests, Set<String> requestedClaims) {
+    private List<String> filterDisclosuresFromCredential(Map<String, Object> credential) {
         Object disclosureValue = credential.get("disclosures");
         if (disclosureValue instanceof List<?> list) {
             List<String> result = new ArrayList<>();
@@ -591,60 +577,23 @@ public class PresentationService {
                     result.add(entry.toString());
                 }
             }
-            return filterDisclosures(result, requests, requestedClaims);
+            return result;
         }
         return List.of();
     }
 
-    private List<String> filterDisclosures(List<String> disclosures, List<ClaimRequest> requests, Set<String> requestedClaims) {
-        if (disclosures.isEmpty() || requestedClaims.isEmpty()) {
-            return disclosures;
+    private List<de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtSelectiveDiscloser.ClaimRequest> toSdJwtRequests(List<ClaimRequest> requests) {
+        if (requests == null || requests.isEmpty()) {
+            return List.of();
         }
-        List<String> filtered = new ArrayList<>();
-        for (String disclosure : disclosures) {
-            String claimName = claimNameFromDisclosure(disclosure);
-            if (claimName != null && (requestedClaims.contains(claimName)
-                    || requests.stream().anyMatch(r -> matchesClaimName(r, claimName)))) {
-                filtered.add(disclosure);
+        List<de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtSelectiveDiscloser.ClaimRequest> converted = new ArrayList<>();
+        for (ClaimRequest req : requests) {
+            if (req == null) {
+                continue;
             }
+            converted.add(new de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtSelectiveDiscloser.ClaimRequest(req.name(), req.jsonPath()));
         }
-        return filtered;
-    }
-
-    private boolean matchesClaimName(ClaimRequest request, String claimName) {
-        if (request == null || claimName == null) {
-            return false;
-        }
-        if (claimName.equals(request.name())) {
-            return true;
-        }
-        if (request.jsonPath() != null && !request.jsonPath().isBlank()) {
-            String normalized = request.jsonPath();
-            if (normalized.startsWith("$.")) {
-                normalized = normalized.substring(2);
-            }
-            if (normalized.startsWith("credentialSubject.")) {
-                normalized = normalized.substring("credentialSubject.".length());
-            } else if (normalized.startsWith("vc.credentialSubject.")) {
-                normalized = normalized.substring("vc.credentialSubject.".length());
-            }
-            if (claimName.equals(normalized) || normalized.endsWith("." + claimName) || normalized.startsWith(claimName + ".")) {
-                return true;
-            }
-        }
-        return request.name() != null && (normalizedContains(claimName, request.name()) || (claimName != null && claimName.startsWith(request.name() + ".")));
-    }
-
-    private boolean normalizedContains(String full, String tail) {
-        return full.equals(tail) || full.endsWith("." + tail);
-    }
-
-    private String claimNameFromDisclosure(String disclosure) {
-        try {
-            return Disclosure.parse(disclosure).getClaimName();
-        } catch (Exception ignored) {
-            return null;
-        }
+        return converted;
     }
 
     private boolean matchesCredentialSet(CredentialRequest definition, Map<String, Object> credential) {
@@ -726,9 +675,21 @@ public class PresentationService {
         Object raw = credential.get("rawCredential");
         if (raw instanceof String rawCredential && !rawCredential.isBlank()) {
             try {
-                String signed = rawCredential.contains("~") ? rawCredential.split("~")[0] : rawCredential;
-                String[] parts = signed.split("\\.");
-                if (parts.length >= 2) {
+            if (sdJwtParser.isSdJwt(rawCredential)) {
+                String vctFromSdJwt = sdJwtParser.extractVct(rawCredential);
+                if (vctFromSdJwt != null) {
+                    return vctFromSdJwt;
+                }
+            }
+            if (mdocParser.isHex(rawCredential)) {
+                String docType = mdocParser.extractDocType(rawCredential);
+                if (docType != null) {
+                    return docType;
+                }
+            }
+            String signed = sdJwtParser.isSdJwt(rawCredential) ? sdJwtParser.signedJwt(rawCredential) : rawCredential;
+            String[] parts = signed.split("\\.");
+            if (parts.length >= 2) {
                     byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
                     JsonNode node = objectMapper.readTree(payload);
                     if (node.has("vct") && node.get("vct").isTextual()) {
@@ -762,8 +723,11 @@ public class PresentationService {
         }
         Object raw = credential.get("rawCredential");
         if (raw instanceof String rawCredential && !rawCredential.isBlank()) {
-            if (rawCredential.contains("~")) {
+            if (sdJwtParser.isSdJwt(rawCredential)) {
                 return "dc+sd-jwt";
+            }
+            if (mdocParser.isHex(rawCredential)) {
+                return "mso_mdoc";
             }
             return "jwt_vc";
         }
@@ -780,9 +744,11 @@ public class PresentationService {
             return Map.of();
         }
         try {
-            if (rawCredential.contains("~")) {
-                SdJwtUtils.SdJwtParts parts = SdJwtUtils.split(rawCredential);
-                return SdJwtUtils.extractDisclosedClaims(parts, objectMapper);
+            if (sdJwtParser.isSdJwt(rawCredential)) {
+                return sdJwtParser.extractDisclosedClaims(rawCredential);
+            }
+            if (mdocParser.isHex(rawCredential)) {
+                return mdocParser.extractClaims(rawCredential);
             }
             String[] parts = rawCredential.split("\\.");
             if (parts.length < 2) {

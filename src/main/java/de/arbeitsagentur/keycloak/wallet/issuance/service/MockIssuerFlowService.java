@@ -70,9 +70,10 @@ public class MockIssuerFlowService {
 
         String issuer = issuerBase(request);
         String resolvedConfigId = resolveConfigurationId(configurationId);
+        String format = resolveFormat(resolvedConfigId);
         BuilderRequest builder = new BuilderRequest(
                 resolvedConfigId,
-                "dc+sd-jwt",
+                format,
                 resolveVct(resolvedConfigId, vct),
                 claims != null && !claims.isEmpty() ? claims : defaultClaims(resolvedConfigId)
         );
@@ -91,6 +92,7 @@ public class MockIssuerFlowService {
         String proofJwt = buildProofJwt(issuer, token.cNonce());
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("credential_configuration_id", resolveConfigurationId(configurationId));
+        requestBody.put("format", resolveFormat(configurationId));
         requestBody.put("proof", Map.of("proof_type", "jwt", "jwt", proofJwt));
         CredentialResult credential = mockIssuerService.issueCredential(
                 "Bearer " + token.accessToken(),
@@ -247,6 +249,10 @@ public class MockIssuerFlowService {
 
     private String resolveConfigurationId(String configurationId) {
         return resolveConfiguration(configurationId).id();
+    }
+
+    private String resolveFormat(String configurationId) {
+        return resolveConfiguration(configurationId).format();
     }
 
     private String resolveVct(String configurationId, String requestedVct) {

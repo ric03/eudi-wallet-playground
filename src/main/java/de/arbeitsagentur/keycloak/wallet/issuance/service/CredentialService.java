@@ -1,7 +1,6 @@
 package de.arbeitsagentur.keycloak.wallet.issuance.service;
 
 import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
-import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
 import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
@@ -28,6 +27,9 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtParser;
+import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocParser;
 
 @Service
 public class CredentialService {
@@ -38,6 +40,8 @@ public class CredentialService {
     private final ObjectMapper objectMapper;
     private final CredentialMetadataService credentialMetadataService;
     private final DebugLogService debugLogService;
+    private final SdJwtParser sdJwtParser;
+    private final MdocParser mdocParser;
 
     public CredentialService(RestTemplate restTemplate, WalletProperties properties,
                              WalletKeyService walletKeyService,
@@ -52,6 +56,8 @@ public class CredentialService {
         this.objectMapper = objectMapper;
         this.credentialMetadataService = credentialMetadataService;
         this.debugLogService = debugLogService;
+        this.sdJwtParser = new SdJwtParser(objectMapper);
+        this.mdocParser = new MdocParser();
     }
 
     public Map<String, Object> issueCredential(String userId, String accessToken, String nonce,
@@ -114,13 +120,15 @@ public class CredentialService {
             stored.put("format", first.path("format").asText(body.path("format").asText(null)));
             if (rawCredential != null) {
                 stored.put("rawCredential", rawCredential);
-                if (rawCredential.contains("~")) {
-                    SdJwtUtils.SdJwtParts parts = SdJwtUtils.split(rawCredential);
+                if (sdJwtParser.isSdJwt(rawCredential)) {
+                    var parts = sdJwtParser.split(rawCredential);
                     stored.put("sdJwt", Map.of(
                             "signedJwt", parts.signedJwt(),
                             "disclosures", parts.disclosures()
                     ));
                     stored.put("credentialSubject", decodeSdJwtSubject(parts));
+                } else if (mdocParser.isHex(rawCredential)) {
+                    stored.put("credentialSubject", mdocParser.extractClaims(rawCredential));
                 } else {
                     stored.put("credentialSubject", decodeJwtSubject(rawCredential));
                 }
@@ -138,8 +146,11 @@ public class CredentialService {
     }
 
     private Map<String, Object> decodeCredentialSubject(String jwt) {
-        if (jwt != null && jwt.contains("~")) {
-            return decodeSdJwtSubject(SdJwtUtils.split(jwt));
+        if (sdJwtParser.isSdJwt(jwt)) {
+            return decodeSdJwtSubject(sdJwtParser.split(jwt));
+        }
+        if (mdocParser.isHex(jwt)) {
+            return mdocParser.extractClaims(jwt);
         }
         return decodeJwtSubject(jwt);
     }
@@ -163,11 +174,7 @@ public class CredentialService {
     }
 
     private Map<String, Object> decodeSdJwtSubject(SdJwtUtils.SdJwtParts parts) {
-        try {
-            return SdJwtUtils.extractDisclosedClaims(parts, objectMapper);
-        } catch (Exception e) {
-            return Map.of();
-        }
+        return sdJwtParser.extractDisclosedClaims(parts);
     }
 
     private String buildProofJwt(String audience, String nonce) {

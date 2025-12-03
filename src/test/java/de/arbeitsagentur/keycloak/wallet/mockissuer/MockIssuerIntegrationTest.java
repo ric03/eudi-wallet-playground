@@ -37,6 +37,7 @@ class MockIssuerIntegrationTest {
     @DynamicPropertySource
     static void overrideProperties(DynamicPropertyRegistry registry) throws Exception {
         Files.deleteIfExists(CONFIG_FILE);
+        Files.deleteIfExists(USER_CONFIG_FILE);
         Path parent = CONFIG_FILE.getParent();
         if (parent != null) {
             Files.createDirectories(parent);

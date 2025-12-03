@@ -43,6 +43,10 @@ class MockIssuerServiceTest {
                         new MockIssuerProperties.ClaimTemplate("family_name", "Family name", "Wallet", true)
                 )
         );
+        MockIssuerProperties.CredentialConfiguration mdocCfg = new MockIssuerProperties.CredentialConfiguration(
+                "mock-pid-mdoc", "mso_mdoc", "mock-scope-mdoc", "Mock PID (mDoc)", "urn:example:pid:mock",
+                List.of()
+        );
         Path configurationFile = tempDir.resolve("mock-issuer-configurations.json");
         ObjectMapper objectMapper = new ObjectMapper();
         props = new MockIssuerProperties(true,
@@ -50,7 +54,7 @@ class MockIssuerServiceTest {
                 Duration.ofMinutes(5),
                 "http://localhost:3000/mock-issuer",
                 configurationFile,
-                List.of(cfg));
+                List.of(cfg, mdocCfg));
         WalletProperties walletProps = new WalletProperties(
                 "http://localhost:8080",
                 "realm",
@@ -105,6 +109,32 @@ class MockIssuerServiceTest {
         assertThat(creds).isNotEmpty();
         assertThat(creds.get(0).get("credential").toString()).contains("~");
         assertThat(credential.decoded().get("claims")).isNotNull();
+    }
+
+    @Test
+    void mdocIssuanceReturnsCredential() throws Exception {
+        BuilderRequest req = new BuilderRequest("mock-pid-mdoc", "mso_mdoc", "urn:example:pid:mock", List.of());
+        var preview = mockIssuerService.preview(req, "http://localhost:3000/mock-issuer");
+        assertThat(preview.encoded()).isNotBlank();
+        assertThat(preview.decoded().get("claims")).isNotNull();
+
+        var offer = mockIssuerService.createOffer(req, "http://localhost:3000/mock-issuer");
+        var token = mockIssuerService.exchangePreAuthorizedCode(offer.preAuthorizedCode());
+        String proofJwt = buildProof(token.cNonce(), props.issuerId());
+
+        var credential = mockIssuerService.issueCredential("Bearer " + token.accessToken(),
+                Map.of(
+                        "credential_configuration_id", "mock-pid-mdoc",
+                        "format", "mso_mdoc",
+                        "proof", Map.of("proof_type", "jwt", "jwt", proofJwt)
+                ),
+                "http://localhost:3000/mock-issuer");
+        assertThat(credential.body().get("credentials")).isInstanceOf(List.class);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> creds = (List<Map<String, Object>>) credential.body().get("credentials");
+        assertThat(creds).isNotEmpty();
+        assertThat(creds.get(0).get("credential").toString()).doesNotContain("~");
+        assertThat(creds.get(0).get("format")).isEqualTo("mso_mdoc");
     }
 
     private String buildProof(String nonce, String audience) throws Exception {

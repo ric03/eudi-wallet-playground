@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JWEObject;
 import org.springframework.stereotype.Service;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtParser;
 
 import java.util.ArrayList;
 import java.util.Base64;
@@ -13,10 +14,12 @@ import java.util.List;
 public class TokenViewService {
     private final VerifierKeyService verifierKeyService;
     private final ObjectMapper objectMapper;
+    private final SdJwtParser sdJwtParser;
 
     public TokenViewService(VerifierKeyService verifierKeyService, ObjectMapper objectMapper) {
         this.verifierKeyService = verifierKeyService;
         this.objectMapper = objectMapper;
+        this.sdJwtParser = new SdJwtParser(objectMapper);
     }
 
     public List<String> presentableTokens(List<String> tokens) {
@@ -70,9 +73,8 @@ public class TokenViewService {
             if (node != null && node.isArray() && node.size() > 0) {
                 token = node.get(0).asText();
             }
-            if (token.contains("~")) {
-                String signed = token.split("~")[0];
-                token = signed;
+            if (sdJwtParser.isSdJwt(token)) {
+                token = sdJwtParser.signedJwt(token);
             }
             if (!token.contains(".")) {
                 return "";

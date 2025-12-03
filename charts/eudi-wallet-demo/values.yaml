@@ -1,7 +1,5 @@
 wallet:
   publicBaseUrl: ""
-  basePath: /wallet
-  healthPath: /wallet
   image:
     repository: ""
     tag: ""

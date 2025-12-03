@@ -63,7 +63,7 @@
         <div class="issuance-card">
           <div class="issuer-chip secondary">Mock issuer</div>
           <h2>Issue without login</h2>
-          <p>Build SD-JWT credentials from configured claim templates without authentication. Mock credentials are shared across sessions.</p>
+          <p>Build SD-JWT or mDoc credentials from configured templates without authentication. Mock credentials are shared across sessions.</p>
           <div class="issuer-body">
             <form method="post" th:action="@{/mock-issue}" class="issuer-form">
               <div class="field">
@@ -126,10 +126,14 @@
           <details style="margin-top:0.75rem;">
             <summary>Raw credential</summary>
             <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-              <a class="sdjwt-link" href="https://sdjwt.co" target="_blank" rel="noreferrer">Open sdjwt.co</a>
+              <a class="sdjwt-link" th:if="${cred.prettyFormat() == 'SD-JWT'}" href="https://sdjwt.co" target="_blank" rel="noreferrer">Open sdjwt.co</a>
               <button class="btn secondary mini copy-btn" type="button" th:attr="data-raw=${cred.rawCredential()}">Copy</button>
             </div>
             <code th:text="${cred.rawCredential()}">raw</code>
+          </details>
+          <details th:if="${cred.prettyFormat() == 'mDoc' and cred.mdocDecoded()}" style="margin-top:0.75rem;">
+            <summary>Decoded mDoc</summary>
+            <pre class="http-body" style="margin:0;" th:text="${cred.mdocDecoded()}"></pre>
           </details>
           <details th:if="${!#lists.isEmpty(cred.disclosures())}">
             <summary>Disclosures</summary>

@@ -1,6 +1,5 @@
 package de.arbeitsagentur.keycloak.wallet.issuance.web;
 
-import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.issuance.oidc.OidcClient;
 import de.arbeitsagentur.keycloak.wallet.issuance.service.CredentialService;
@@ -12,6 +11,8 @@ import de.arbeitsagentur.keycloak.wallet.mockissuer.config.MockIssuerConfigurati
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
+import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocParser;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtParser;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -26,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Controller
 public class WalletPageController {
@@ -34,6 +36,8 @@ public class WalletPageController {
     private final CredentialService credentialService;
     private final OidcClient oidcClient;
     private final ObjectMapper objectMapper;
+    private final MdocParser mdocParser;
+    private final SdJwtParser sdJwtParser;
     private final DebugLogService debugLogService;
     private final MockIssuerFlowService mockIssuerFlowService;
     private final MockIssuerConfigurationStore mockIssuerConfigurationStore;
@@ -51,6 +55,8 @@ public class WalletPageController {
         this.credentialService = credentialService;
         this.oidcClient = oidcClient;
         this.objectMapper = objectMapper;
+        this.mdocParser = new MdocParser();
+        this.sdJwtParser = new SdJwtParser(objectMapper);
         this.debugLogService = debugLogService;
         this.mockIssuerFlowService = mockIssuerFlowService;
         this.mockIssuerConfigurationStore = mockIssuerConfigurationStore;
@@ -149,13 +155,14 @@ public class WalletPageController {
         for (CredentialStore.Entry entry : entries) {
             Map<String, Object> map = objectMapper.convertValue(entry.credential(), Map.class);
             String raw = map.containsKey("rawCredential") ? String.valueOf(map.get("rawCredential")) : null;
-            String format = String.valueOf(map.getOrDefault("format",
-                    raw != null && raw.contains("~") ? "SD-JWT" : "JWT"));
+            List<String> disclosures = extractDisclosures(map);
+            String format = detectFormat(map.get("format"), raw, disclosures);
             Map<String, Object> claims = filterDisplayClaims(extractClaims(map, raw));
             String vct = extractVct(map, raw);
-            List<String> disclosures = extractDisclosures(map);
             String storedAt = map.getOrDefault("storedAt", "").toString();
-            result.add(new DisplayCredential(entry.fileName(), format, vct, raw, storedAt, claims, disclosures));
+            String mdocDecoded = "mso_mdoc".equalsIgnoreCase(format) ? decodeMdoc(raw) : null;
+            boolean sdJwtLike = sdJwtParser.isSdJwt(raw) || (disclosures != null && !disclosures.isEmpty());
+            result.add(new DisplayCredential(entry.fileName(), format, vct, raw, storedAt, claims, disclosures, mdocDecoded, sdJwtLike));
         }
         return result;
     }
@@ -187,9 +194,11 @@ public class WalletPageController {
             return Collections.emptyMap();
         }
         try {
-            if (raw.contains("~")) {
-                SdJwtUtils.SdJwtParts parts = SdJwtUtils.split(raw);
-                return SdJwtUtils.extractDisclosedClaims(parts, objectMapper);
+            if (sdJwtParser.isSdJwt(raw)) {
+                return sdJwtParser.extractDisclosedClaims(raw);
+            }
+            if (mdocParser.isHex(raw)) {
+                return mdocParser.extractClaims(raw);
             }
             String[] parts = raw.split("\\.");
             if (parts.length < 2) {
@@ -221,6 +230,25 @@ public class WalletPageController {
         return Collections.emptyList();
     }
 
+    private String detectFormat(Object declared, String raw, List<String> disclosures) {
+        if (declared instanceof String s && !s.isBlank()) {
+            return s;
+        }
+        if (raw != null && sdJwtParser.isSdJwt(raw)) {
+            return "dc+sd-jwt";
+        }
+        if (disclosures != null && !disclosures.isEmpty()) {
+            return "dc+sd-jwt";
+        }
+        if (raw != null && mdocParser.isHex(raw) && raw.length() > 32) {
+            return "mso_mdoc";
+        }
+        if (raw != null) {
+            return "jwt_vc";
+        }
+        return "unknown format";
+    }
+
     private Map<String, Object> filterDisplayClaims(Map<String, Object> claims) {
         if (claims == null || claims.isEmpty()) {
             return Collections.emptyMap();
@@ -240,6 +268,17 @@ public class WalletPageController {
         return filtered;
     }
 
+    private String decodeMdoc(String raw) {
+        if (!mdocParser.isHex(raw)) {
+            return null;
+        }
+        try {
+            return mdocParser.prettyPrint(raw);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String extractVct(Map<String, Object> map, String raw) {
         Object existing = map.get("vct");
         if (existing != null) {
@@ -249,10 +288,11 @@ public class WalletPageController {
             return null;
         }
         try {
-            if (raw.contains("~")) {
-                SdJwtUtils.SdJwtParts parts = SdJwtUtils.split(raw);
-                JsonNode node = objectMapper.readTree(Base64.getUrlDecoder().decode(parts.signedJwt().split("\\.")[1]));
-                return node.path("vct").asText(null);
+            if (sdJwtParser.isSdJwt(raw)) {
+                return sdJwtParser.extractVct(raw);
+            }
+            if (mdocParser.isHex(raw)) {
+                return mdocParser.extractDocType(raw);
             }
             String[] parts = raw.split("\\.");
             if (parts.length < 2) {
@@ -291,11 +331,13 @@ public class WalletPageController {
                                     String rawCredential,
                                     String storedAt,
                                     Map<String, Object> claims,
-                                    List<String> disclosures) {
+                                    List<String> disclosures,
+                                    String mdocDecoded,
+                                    boolean sdJwtLike) {
         public String prettyFormat() {
             String normalized = format == null ? "" : format.trim();
             if (normalized.isBlank() || "unknown format".equalsIgnoreCase(normalized) || "null".equalsIgnoreCase(normalized)) {
-                if (rawCredential != null && rawCredential.contains("~")) {
+                if (sdJwtLike) {
                     return "SD-JWT";
                 }
                 if (!disclosures.isEmpty()) {
@@ -305,6 +347,9 @@ public class WalletPageController {
             }
             if (normalized.equalsIgnoreCase("dc+sd-jwt") || normalized.equalsIgnoreCase("sd-jwt") || normalized.equalsIgnoreCase("dc_sd_jwt")) {
                 return "SD-JWT";
+            }
+            if (normalized.equalsIgnoreCase("mso_mdoc")) {
+                return "mDoc";
             }
             return normalized;
         }

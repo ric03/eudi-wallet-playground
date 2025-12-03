@@ -3,16 +3,13 @@ package de.arbeitsagentur.keycloak.wallet.verification.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jwt.SignedJWT;
-import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils;
+import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocVerifier;
+import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtVerifier;
 import de.arbeitsagentur.keycloak.wallet.verification.config.VerifierProperties;
-import de.arbeitsagentur.keycloak.wallet.verification.service.VerificationSteps.StepDetail;
 import org.springframework.stereotype.Service;
 
-import java.security.PublicKey;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -22,6 +19,8 @@ public class PresentationVerificationService {
     private final VerifierProperties properties;
     private final ObjectMapper objectMapper;
     private final VerifierKeyService verifierKeyService;
+    private final SdJwtVerifier sdJwtVerifier;
+    private final MdocVerifier mdocVerifier;
 
     public PresentationVerificationService(TrustListService trustListService,
                                            VerifierProperties properties,
@@ -31,6 +30,8 @@ public class PresentationVerificationService {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.verifierKeyService = verifierKeyService;
+        this.sdJwtVerifier = new SdJwtVerifier(objectMapper, trustListService);
+        this.mdocVerifier = new MdocVerifier(trustListService);
     }
 
     public List<Map<String, Object>> verifyPresentations(List<String> vpTokens,
@@ -63,49 +64,16 @@ public class PresentationVerificationService {
         Envelope envelope = unwrapEnvelope(decryptedToken);
         String keyBindingJwt = envelope != null ? envelope.kbJwt() : null;
         if (envelope != null) {
-            if (expectedNonce != null && !expectedNonce.equals(envelope.nonce())) {
-                throw new IllegalStateException("Nonce mismatch in presentation");
-            }
-            if (envelope.audience() != null && !audience.equals(envelope.audience())) {
-                throw new IllegalStateException("Audience mismatch in presentation");
-            }
             decryptedToken = envelope.innerToken();
-            steps.add("Validated holder binding envelope (audience/nonce)",
-                    "Validated KB-JWT holder binding: cnf key matches credential and signature verified.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.4");
         } else if (expectedNonce != null && responseNonce != null && !expectedNonce.equals(responseNonce)) {
             throw new IllegalStateException("Nonce mismatch in presentation");
         }
 
-        if (decryptedToken.contains("~")) {
-            SdJwtUtils.SdJwtParts parts = SdJwtUtils.split(decryptedToken);
-            SignedJWT jwt = SignedJWT.parse(parts.signedJwt());
-            steps.add("Parsed SD-JWT presentation",
-                    "Parsed SD-JWT based presentation and prepared for signature/disclosure checks.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
-            if (!trustListService.verify(jwt, trustListId)) {
-                throw new IllegalStateException("Credential signature not trusted");
-            }
-            steps.add("Signature verified against trust-list.json",
-                    "Checked JWT/SD-JWT signature against trusted issuers in the trust list.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
-            boolean disclosuresValid;
-            try {
-                disclosuresValid = SdJwtUtils.verifyDisclosures(jwt, parts, objectMapper);
-            } catch (Exception e) {
-                throw new IllegalStateException("Credential signature not trusted", e);
-            }
-            if (!disclosuresValid) {
-                throw new IllegalStateException("Credential signature not trusted");
-            }
-            steps.add("Disclosures validated",
-                    "Validated selective disclosure digests against presented disclosures.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
-            Map<String, Object> claims = new java.util.LinkedHashMap<>(SdJwtUtils.extractDisclosedClaims(parts, objectMapper));
-            if (keyBindingJwt != null && !keyBindingJwt.isBlank()) {
-                claims.put("key_binding_jwt", keyBindingJwt);
-            }
-            return claims;
+        if (sdJwtVerifier.isSdJwt(decryptedToken)) {
+            return sdJwtVerifier.verify(decryptedToken, trustListId, audience, expectedNonce, keyBindingJwt, steps);
+        }
+        if (mdocVerifier.isMdoc(decryptedToken)) {
+            return mdocVerifier.verify(decryptedToken, trustListId, keyBindingJwt, audience, expectedNonce, steps);
         }
 
         SignedJWT jwt = SignedJWT.parse(decryptedToken);
@@ -146,6 +114,10 @@ public class PresentationVerificationService {
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-14.1.2");
         Map<String, Object> claims = new java.util.LinkedHashMap<>(jwt.getJWTClaimsSet().getClaims());
         if (keyBindingJwt != null && !keyBindingJwt.isBlank()) {
+            sdJwtVerifier.verifyHolderBinding(keyBindingJwt, decryptedToken, audience, expectedNonce);
+            steps.add("Validated holder binding",
+                    "Validated KB-JWT holder binding: cnf key matches credential and signature verified.",
+                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.4");
             claims.put("key_binding_jwt", keyBindingJwt);
         }
         return claims;
@@ -172,32 +144,7 @@ public class PresentationVerificationService {
             if (inner == null || inner.asText().isBlank()) {
                 return null;
             }
-            String innerToken = inner.asText();
-            PublicKey credentialKey = extractHolderKey(innerToken);
-            if (credentialKey == null) {
-                return new Envelope(innerToken, claims.path("nonce").asText(null), firstAudience(outer), token);
-            }
-            PublicKey kbKey = parsePublicJwk(claims.path("cnf").path("jwk"));
-            if (kbKey == null) {
-                return new Envelope(innerToken, claims.path("nonce").asText(null), firstAudience(outer), token);
-            }
-            if (!keysMatch(credentialKey, kbKey)) {
-                throw new IllegalStateException("Holder binding key does not match credential cnf");
-            }
-            if (!TrustListService.verifyWithKey(outer, kbKey)) {
-                throw new IllegalStateException("Holder binding signature invalid");
-            }
-            if (outer.getJWTClaimsSet().getExpirationTime() != null
-                    && outer.getJWTClaimsSet().getExpirationTime().toInstant().isBefore(Instant.now())) {
-                throw new IllegalStateException("Presentation has expired");
-            }
-            if (outer.getJWTClaimsSet().getNotBeforeTime() != null
-                    && outer.getJWTClaimsSet().getNotBeforeTime().toInstant().isAfter(Instant.now())) {
-                throw new IllegalStateException("Presentation not yet valid");
-            }
-            String nonce = claims.path("nonce").asText(null);
-            String aud = firstAudience(outer);
-            return new Envelope(innerToken, nonce, aud, token);
+            return new Envelope(inner.asText(), claims.path("nonce").asText(null), firstAudience(outer), token);
         } catch (java.text.ParseException e) {
             return null;
         } catch (Exception e) {
@@ -210,63 +157,6 @@ public class PresentationVerificationService {
             return outer.getJWTClaimsSet().getAudience().get(0);
         }
         return null;
-    }
-
-    private java.security.PublicKey extractHolderKey(String sdJwt) {
-        try {
-            String candidate = sdJwt;
-            if (candidate.contains("~")) {
-                candidate = candidate.split("~")[0];
-            }
-            if (!candidate.contains(".")) {
-                return null;
-            }
-            String[] parts = candidate.split("\\.");
-            if (parts.length < 2) {
-                return null;
-            }
-            byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
-            JsonNode node = objectMapper.readTree(payload);
-            JsonNode jwk = node.path("cnf").path("jwk");
-            if (jwk.isMissingNode()) {
-                return null;
-            }
-            com.nimbusds.jose.jwk.JWK parsed = com.nimbusds.jose.jwk.JWK.parse(jwk.toString());
-            if (parsed instanceof com.nimbusds.jose.jwk.ECKey ecKey) {
-                return ecKey.toECPublicKey();
-            }
-            if (parsed instanceof com.nimbusds.jose.jwk.RSAKey rsaKey) {
-                return rsaKey.toRSAPublicKey();
-            }
-            return null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private PublicKey parsePublicJwk(JsonNode jwkNode) {
-        if (jwkNode == null || jwkNode.isMissingNode() || jwkNode.isNull()) {
-            return null;
-        }
-        try {
-            com.nimbusds.jose.jwk.JWK parsed = com.nimbusds.jose.jwk.JWK.parse(jwkNode.toString());
-            if (parsed instanceof com.nimbusds.jose.jwk.ECKey ecKey) {
-                return ecKey.toECPublicKey();
-            }
-            if (parsed instanceof com.nimbusds.jose.jwk.RSAKey rsaKey) {
-                return rsaKey.toRSAPublicKey();
-            }
-            return null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private boolean keysMatch(PublicKey left, PublicKey right) {
-        if (left == null || right == null) {
-            return false;
-        }
-        return Arrays.equals(left.getEncoded(), right.getEncoded());
     }
 
     public record Envelope(String innerToken, String nonce, String audience, String kbJwt) {

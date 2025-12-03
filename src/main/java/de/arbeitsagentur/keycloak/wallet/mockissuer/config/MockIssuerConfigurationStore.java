@@ -171,9 +171,17 @@ public class MockIssuerConfigurationStore {
         if (!StringUtils.hasText(cfg.vct())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "vct is required");
         }
-        if (!"dc+sd-jwt".equalsIgnoreCase(cfg.format())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only dc+sd-jwt credentials are supported");
+        if (!supportsFormat(cfg.format())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only dc+sd-jwt or mso_mdoc credentials are supported");
         }
+    }
+
+    private boolean supportsFormat(String format) {
+        if (!StringUtils.hasText(format)) {
+            return false;
+        }
+        String normalized = format.trim().toLowerCase();
+        return normalized.equals("dc+sd-jwt") || normalized.equals("mso_mdoc");
     }
 
     private void persist() {

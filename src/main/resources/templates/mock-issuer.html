@@ -12,7 +12,7 @@
         <div>
           <div class="eyebrow">OID4VCI Playground</div>
           <h1>Mock Issuer</h1>
-          <p>Build SD-JWT credentials without Keycloak. Generate a credential offer, copy the pre-authorized code, and feed it to any OID4VCI wallet.</p>
+          <p>Build SD-JWT or mDoc credentials without Keycloak. Generate a credential offer, copy the pre-authorized code, and feed it to any OID4VCI wallet.</p>
         </div>
       <div class="actions">
         <a class="btn secondary" th:href="@{/}">Wallet</a>
@@ -128,7 +128,7 @@
       <div class="builder" id="credential-builder" data-section-block="credential-builder">
         <div class="builder-title">
           <div>
-            <div class="muted">Issue SD-JWT credentials</div>
+            <div class="muted">Issue SD-JWT or mDoc credentials</div>
             <h3>Credential builder</h3>
           </div>
           <div class="chip soft">Uses saved configurations</div>
@@ -141,9 +141,8 @@
                       th:value="${cfg.id()}"
                       th:data-format="${cfg.format()}"
                       th:data-vct="${cfg.vct()}"
-                      th:attr="disabled=${cfg.format().equals('mso_mdoc')} ? 'disabled' : null"
                       th:selected="${cfg.id() == defaultConfigurationId}"
-                      th:text="${cfg.format().equals('mso_mdoc') ? cfg.name() + ' (coming soon)' : cfg.name()}">mock</option>
+                      th:text="${cfg.name()}">mock</option>
             </select>
           </div>
           <div class="field">
@@ -174,7 +173,7 @@
           <div>
             <div class="preview-header">
               <div>
-                <div class="muted">Preview SD-JWT</div>
+                <div class="muted" id="preview-label">Preview credential</div>
                 <div class="pill tiny" id="preview-state">Encoded</div>
               </div>
               <div class="preview-actions">
@@ -182,7 +181,7 @@
                 <button type="button" class="btn secondary mini" id="copy-preview">Copy</button>
               </div>
             </div>
-            <pre id="preview">Add claims to see the SD-JWT preview.</pre>
+            <pre id="preview">Add claims to see the credential preview.</pre>
           </div>
         </div>
 
@@ -237,6 +236,7 @@
         const formatChip = document.getElementById("format-chip");
         const claimsContainer = document.getElementById("claims");
         const claimsTitle = document.getElementById("claims-title");
+        const previewLabel = document.getElementById("preview-label");
         const previewBlock = document.getElementById("preview");
         const previewState = document.getElementById("preview-state");
         const togglePreview = document.getElementById("toggle-preview");
@@ -277,6 +277,14 @@
         let newClaimTemplates = [
           { name: "given_name", label: "Given name", defaultValue: "Alice", required: true }
         ];
+
+        const emptyPreviewText = (format) => {
+          if (!format) return "Add claims to see the credential preview.";
+          if (format.toLowerCase() === "mso_mdoc") {
+            return "Add claims to see the mDoc preview.";
+          }
+          return "Add claims to see the SD-JWT preview.";
+        };
 
         if (!defaultConfigurationId && configurationList.length > 0) {
           defaultConfigurationId = configurationList[0].id;
@@ -336,6 +344,9 @@
           if (formatChip) {
             formatChip.textContent = cfg.format || "dc+sd-jwt";
           }
+          if (previewLabel) {
+            previewLabel.textContent = cfg.format && cfg.format.toLowerCase() === "mso_mdoc" ? "Preview mDoc" : "Preview SD-JWT";
+          }
           if (vctInput) {
             vctInput.value = cfg.vct || "";
           }
@@ -344,7 +355,13 @@
           }
           if (claimHint) {
             const total = (cfg.claims || []).length;
-            claimHint.textContent = total > 0 ? `${total} claim${total === 1 ? "" : "s"} will be selectively disclosed.` : "No claims configured for this credential.";
+            if (cfg.format && cfg.format.toLowerCase() === "mso_mdoc") {
+              claimHint.textContent = total > 0
+                ? `${total} claim${total === 1 ? "" : "s"} will be embedded in the mDoc.`
+                : "No claims configured for this credential.";
+            } else {
+              claimHint.textContent = total > 0 ? `${total} claim${total === 1 ? "" : "s"} will be selectively disclosed.` : "No claims configured for this credential.";
+            }
           }
         }
 
@@ -439,8 +456,9 @@
 
         function updatePreviewUi() {
           if (!previewBlock) return;
+          const cfg = currentConfig();
           const text = previewMode === "decoded" ? cachedPreview.decoded : cachedPreview.encoded;
-          previewBlock.textContent = text || "Add claims to see the SD-JWT preview.";
+          previewBlock.textContent = text || emptyPreviewText(cfg?.format);
           if (previewState) {
             previewState.textContent = previewMode === "decoded" ? "Decoded" : "Encoded";
           }
@@ -556,12 +574,8 @@
           option.value = cfg.id;
           option.dataset.format = cfg.format || "dc+sd-jwt";
           option.dataset.vct = cfg.vct || "";
-          if (cfg.format === "mso_mdoc") {
-            option.setAttribute("disabled", "disabled");
-            option.textContent = `${cfg.name || cfg.id} (coming soon)`;
-          } else {
-            option.textContent = cfg.name || cfg.id;
-          }
+          const label = cfg.name || cfg.id;
+          option.textContent = cfg.format && cfg.format.toLowerCase() === "mso_mdoc" ? `${label} (mDoc)` : label;
           configurationSelect.appendChild(option);
           configurationSelect.value = cfg.id;
           configurationSelect.dispatchEvent(new Event("change"));
