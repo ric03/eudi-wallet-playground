@@ -3,8 +3,8 @@ package de.arbeitsagentur.keycloak.wallet.mockissuer;
 import COSE.AlgorithmID;
 import COSE.OneKey;
 import COSE.Sign1Message;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.cbor.databind.CBORMapper;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.dataformat.cbor.CBORMapper;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -18,16 +18,18 @@ import de.arbeitsagentur.keycloak.wallet.common.util.HexUtils;
 import org.junit.jupiter.api.Test;
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestClient;
 
 import java.net.URI;
 import java.time.Instant;
@@ -40,11 +42,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class MockIssuerMdocIntegrationTest {
 
+    private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
+            new ParameterizedTypeReference<>() {};
+
     @LocalServerPort
     private int port;
 
-    @Autowired
-    private TestRestTemplate restTemplate;
+    private RestClient restClient;
 
     @Autowired
     private WalletKeyService walletKeyService;
@@ -57,6 +61,13 @@ class MockIssuerMdocIntegrationTest {
 
     private final CBORMapper cborMapper = new CBORMapper();
 
+    @BeforeEach
+    void setUpRestClient() {
+        restClient = RestClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .build();
+    }
+
     @Test
     void issuesMdocCredentialEndToEnd() throws Exception {
         Map<String, Object> offerRequest = Map.of(
@@ -66,14 +77,23 @@ class MockIssuerMdocIntegrationTest {
                 "claims", List.of(Map.of("name", "given_name", "value", "Alice"))
         );
 
-        ResponseEntity<Map> offer = restTemplate.postForEntity(baseUrl("/mock-issuer/offers"), offerRequest, Map.class);
+        ResponseEntity<Map<String, Object>> offer = restClient.post()
+                .uri("/mock-issuer/offers")
+                .body(offerRequest)
+                .retrieve()
+                .toEntity(MAP_TYPE);
         assertThat(offer.getStatusCode().is2xxSuccessful()).isTrue();
         String preAuth = String.valueOf(offer.getBody().get("preAuthorizedCode"));
         assertThat(preAuth).isNotBlank();
 
         MultiValueMap<String, String> tokenForm = new LinkedMultiValueMap<>();
         tokenForm.add("pre-authorized_code", preAuth);
-        ResponseEntity<Map> tokenResponse = restTemplate.postForEntity(baseUrl("/mock-issuer/token"), tokenForm, Map.class);
+        ResponseEntity<Map<String, Object>> tokenResponse = restClient.post()
+                .uri("/mock-issuer/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(tokenForm)
+                .retrieve()
+                .toEntity(MAP_TYPE);
         assertThat(tokenResponse.getStatusCode().is2xxSuccessful()).isTrue();
         Map<String, Object> tokenBody = tokenResponse.getBody();
         assertThat(tokenBody).isNotNull();
@@ -92,7 +112,12 @@ class MockIssuerMdocIntegrationTest {
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(credentialRequest);
-        ResponseEntity<Map> credentialResponse = restTemplate.exchange(credentialEntity, Map.class);
+        ResponseEntity<Map<String, Object>> credentialResponse = restClient.method(credentialEntity.getMethod())
+                .uri(credentialEntity.getUrl())
+                .headers(headers -> headers.putAll(credentialEntity.getHeaders()))
+                .body(credentialEntity.getBody())
+                .retrieve()
+                .toEntity(MAP_TYPE);
         assertThat(credentialResponse.getStatusCode().is2xxSuccessful()).isTrue();
         Map<String, Object> credentialBody = credentialResponse.getBody();
         assertThat(credentialBody).isNotNull();

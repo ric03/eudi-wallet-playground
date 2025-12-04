@@ -1,7 +1,8 @@
 package de.arbeitsagentur.keycloak.wallet.common.storage;
 
 import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -33,7 +34,7 @@ public class CredentialStore {
                     .resolve("%s-%d-%s.json".formatted(safeUser, System.currentTimeMillis(), UUID.randomUUID()));
             objectMapper.writeValue(file.toFile(), credential);
             return file;
-        } catch (IOException e) {
+        } catch (IOException | JacksonException e) {
             throw new IllegalStateException("Failed to store credential", e);
         }
     }
@@ -45,7 +46,7 @@ public class CredentialStore {
                 if (belongsToUser(path, userId)) {
                     try {
                         items.add(objectMapper.readValue(path.toFile(), Object.class));
-                    } catch (IOException ignored) {
+                    } catch (JacksonException ignored) {
                     }
                 }
             }
@@ -69,7 +70,7 @@ public class CredentialStore {
                     String fileName = path.getFileName().toString();
                     Object data = objectMapper.readValue(path.toFile(), Object.class);
                     items.add(new Entry(fileName, data));
-                } catch (IOException ignored) {
+                } catch (JacksonException ignored) {
                 }
             }
             return items;
@@ -105,7 +106,7 @@ public class CredentialStore {
                 try {
                     Object data = objectMapper.readValue(path.toFile(), Object.class);
                     items.add(new Entry(fileName, data));
-                } catch (IOException ignored) {
+                } catch (JacksonException ignored) {
                 }
             }
             return items;
@@ -200,7 +201,7 @@ public class CredentialStore {
                     String fileName = path.getFileName().toString();
                     Object data = objectMapper.readValue(path.toFile(), Object.class);
                     items.add(new Entry(fileName, data));
-                } catch (IOException ignored) {
+                } catch (JacksonException ignored) {
                 }
             }
             return items;

@@ -14,10 +14,10 @@ import de.arbeitsagentur.keycloak.wallet.verification.session.VerifierSession;
 import de.arbeitsagentur.keycloak.wallet.verification.session.VerifierSessionService;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService.DebugEntry;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JsonParser;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.nimbusds.jose.EncryptionMethod;
 import com.nimbusds.jose.JWEAlgorithm;
 import com.nimbusds.jose.JWEHeader;
@@ -602,7 +602,8 @@ public class VerifierController {
                 throw new IllegalArgumentException("Trailing content in vp_token");
             }
             if (node.isObject()) {
-                node.fields().forEachRemaining(field -> {
+                ObjectNode objectNode = (ObjectNode) node;
+                objectNode.properties().forEach(field -> {
                     String queryId = field.getKey();
                     JsonNode value = field.getValue();
                     if (value.isArray()) {

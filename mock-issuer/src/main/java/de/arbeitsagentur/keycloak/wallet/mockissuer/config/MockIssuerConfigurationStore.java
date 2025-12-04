@@ -1,8 +1,9 @@
 package de.arbeitsagentur.keycloak.wallet.mockissuer.config;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,7 +12,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -124,7 +124,7 @@ public class MockIssuerConfigurationStore {
                 return Optional.empty();
             }
             return Optional.of(parsed);
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             LOG.warn("Failed to read mock issuer configurations from {}", file, e);
             return Optional.empty();
         }

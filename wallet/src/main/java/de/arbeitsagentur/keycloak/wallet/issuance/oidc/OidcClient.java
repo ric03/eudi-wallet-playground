@@ -5,10 +5,10 @@ import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
 import de.arbeitsagentur.keycloak.wallet.issuance.service.CredentialMetadataService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.TokenSet;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.UserProfile;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
@@ -84,7 +84,7 @@ public class OidcClient {
                 properties.tokenEndpoint(),
                 headers.toSingleValueMap(),
                 formEncode(body),
-                response.getStatusCodeValue(),
+                response.getStatusCode().value(),
                 response.getHeaders().toSingleValueMap(),
                 prettyJson(response.getBody()),
                 "https://openid.net/specs/openid-connect-core-1_0.html#TokenEndpoint",
@@ -112,7 +112,7 @@ public class OidcClient {
                 properties.tokenEndpoint(),
                 headers.toSingleValueMap(),
                 formEncode(body),
-                response.getStatusCodeValue(),
+                response.getStatusCode().value(),
                 response.getHeaders().toSingleValueMap(),
                 prettyJson(response.getBody()),
                 "https://openid.net/specs/openid-connect-core-1_0.html#TokenEndpoint",
@@ -122,12 +122,16 @@ public class OidcClient {
     }
 
     private TokenSet parseTokenSet(JsonNode json) {
+        String accessToken = json.path("access_token").asText(null);
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new IllegalStateException("Token endpoint response missing access_token");
+        }
         Instant expiresAt = json.has("expires_in") ? Instant.now().plusSeconds(json.get("expires_in").asLong()) : null;
         Instant cNonceExp = json.has("c_nonce_expires_in")
                 ? Instant.now().plusSeconds(json.get("c_nonce_expires_in").asLong())
                 : null;
         return new TokenSet(
-                json.path("access_token").asText(),
+                accessToken,
                 json.path("refresh_token").asText(null),
                 json.path("scope").asText(null),
                 expiresAt,
@@ -158,7 +162,7 @@ public class OidcClient {
                 properties.userInfoEndpoint(),
                 headers.toSingleValueMap(),
                 "",
-                response.getStatusCodeValue(),
+                response.getStatusCode().value(),
                 response.getHeaders().toSingleValueMap(),
                 prettyJson(body),
                 "https://openid.net/specs/openid-connect-core-1_0.html#UserInfo",
@@ -205,22 +209,34 @@ public class OidcClient {
 
     private String buildAuthorizationDetailsArray() {
         ArrayNode arr = objectMapper.createArrayNode();
+        Exception lastError = null;
         try {
             for (var opt : credentialMetadataService.availableCredentials()) {
                 addDescriptor(arr, opt.configurationId());
             }
         } catch (Exception e) {
+            lastError = e;
             addDescriptor(arr, safeDefaultConfigurationId());
         }
         if (arr.isEmpty()) {
-            addDescriptor(arr, safeDefaultConfigurationId());
+            try {
+                addDescriptor(arr, safeDefaultConfigurationId());
+            } catch (Exception e) {
+                lastError = e;
+            }
         }
         if (arr.isEmpty()) {
+            if (lastError != null) {
+                throw new IllegalStateException("Unable to build authorization_details from issuer metadata", lastError);
+            }
             return null;
         }
         try {
             return objectMapper.writeValueAsString(arr);
         } catch (Exception e) {
+            if (lastError != null) {
+                throw new IllegalStateException("Unable to build authorization_details from issuer metadata", lastError);
+            }
             return null;
         }
     }

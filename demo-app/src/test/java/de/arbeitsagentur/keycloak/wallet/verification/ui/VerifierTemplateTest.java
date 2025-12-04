@@ -24,12 +24,11 @@ class VerifierTemplateTest {
     }
 
     @Test
-    void verifierResultOffersCborLink() throws Exception {
+    void verifierResultDoesNotRenderTokenHints() throws Exception {
         String html = resource("templates/verifier-result.html");
         Document document = Jsoup.parse(html);
-        assertThat(document.select(".token-hint").eachText())
-                .anyMatch(text -> text.toLowerCase().contains("mDoc".toLowerCase()) || text.toLowerCase().contains("mdoc"));
-        assertThat(html).contains("Built-in mDoc viewer");
+        assertThat(document.select(".token-hint")).isEmpty();
+        assertThat(html).contains("Decoded mDoc");
     }
 
     private String resource(String path) throws Exception {

@@ -1,7 +1,7 @@
 package de.arbeitsagentur.keycloak.wallet.demo.oid4vp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtParser;
 import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocParser;
@@ -271,11 +271,11 @@ public class PresentationService {
             }
             List<CredentialRequest> result = new ArrayList<>();
             for (JsonNode credentialNode : credentials) {
-                String id = credentialNode.path("id").asText();
+                String id = textOrNull(credentialNode, "id");
                 if (id == null || id.isBlank()) {
                     id = "credential-%d".formatted(result.size() + 1);
                 }
-                String format = normalizeFormat(credentialNode.path("format").asText(null));
+                String format = normalizeFormat(textOrNull(credentialNode, "format"));
                 List<ClaimRequest> claims = extractClaimRequestsFromDcql(credentialNode.path("claims"));
                 List<FieldConstraint> constraints = buildConstraintsFromClaims(claims);
                 List<CredentialSetFilter> credentialSets = parseCredentialSets(credentialNode.path("credential_set"));

@@ -1,8 +1,8 @@
 package de.arbeitsagentur.keycloak.wallet.verification.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import de.arbeitsagentur.keycloak.wallet.verification.config.VerifierProperties;
 import org.springframework.stereotype.Component;
 

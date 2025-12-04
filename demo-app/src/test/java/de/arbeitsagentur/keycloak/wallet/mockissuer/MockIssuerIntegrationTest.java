@@ -1,15 +1,16 @@
 package de.arbeitsagentur.keycloak.wallet.mockissuer;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.web.client.RestClient;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,6 +22,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class MockIssuerIntegrationTest {
 
+    private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
+            new ParameterizedTypeReference<>() {};
+
     private static final Path CONFIG_FILE = Path.of("target", "mock-issuer-config-int.json");
     private static final Path DATA_DIR = Path.of("target", "mock-data");
     private static final Path USER_CONFIG_FILE = DATA_DIR.resolve("mock-issuer/configurations.json");
@@ -28,8 +32,7 @@ class MockIssuerIntegrationTest {
     @LocalServerPort
     private int port;
 
-    @Autowired
-    private TestRestTemplate restTemplate;
+    private RestClient restClient;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -53,6 +56,9 @@ class MockIssuerIntegrationTest {
         Files.createDirectories(CONFIG_FILE.getParent());
         Files.deleteIfExists(USER_CONFIG_FILE);
         Files.createDirectories(USER_CONFIG_FILE.getParent());
+        restClient = RestClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .build();
     }
 
     @Test
@@ -73,20 +79,25 @@ class MockIssuerIntegrationTest {
                 )
         );
 
-        @SuppressWarnings("unchecked")
-        var created = restTemplate.postForEntity(baseUrl("/mock-issuer/configurations"), payload, Map.class);
+        var created = restClient.post()
+                .uri("/mock-issuer/configurations")
+                .body(payload)
+                .retrieve()
+                .toEntity(MAP_TYPE);
         assertThat(created.getStatusCode().is2xxSuccessful())
                 .withFailMessage("POST /mock-issuer/configurations returned %s with body %s", created.getStatusCode(), created.getBody())
                 .isTrue();
-        Map<String, Object> createdBody = (Map<String, Object>) created.getBody();
+        Map<String, Object> createdBody = created.getBody();
         assertThat(createdBody).isNotNull();
         assertThat(createdBody).containsEntry("id", "integration-credential");
 
         JsonNode stored = objectMapper.readTree(USER_CONFIG_FILE.toFile());
         assertThat(stored.toString()).contains("integration-credential");
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> metadata = restTemplate.getForObject(baseUrl("/mock-issuer/.well-known/openid-credential-issuer"), Map.class);
+        Map<String, Object> metadata = restClient.get()
+                .uri("/mock-issuer/.well-known/openid-credential-issuer")
+                .retrieve()
+                .body(MAP_TYPE);
         assertThat(metadata).isNotNull();
         Object configs = metadata.get("credential_configurations_supported");
         assertThat(configs).isInstanceOf(Map.class);
@@ -99,14 +110,13 @@ class MockIssuerIntegrationTest {
                 "vct", "urn:example:integration",
                 "claims", List.of(Map.of("name", "email", "value", "user@example.com"))
         );
-        var preview = restTemplate.postForEntity(baseUrl("/mock-issuer/preview"), previewRequest, Map.class);
+        var preview = restClient.post()
+                .uri("/mock-issuer/preview")
+                .body(previewRequest)
+                .retrieve()
+                .toEntity(MAP_TYPE);
         assertThat(preview.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(preview.getBody()).isNotNull();
         assertThat(preview.getBody().get("encoded")).isInstanceOf(String.class);
     }
-
-    private String baseUrl(String path) {
-        return "http://localhost:" + port + path;
-    }
-
 }

@@ -85,7 +85,13 @@
           </div>
           <div class="actions">
             <button type="button" class="btn secondary mini" id="add-claim">Add claim</button>
-            <div class="chip">Format: dc+sd-jwt</div>
+            <div class="field inline" style="margin:0;">
+              <label class="sub-label" for="new-config-format">Format</label>
+              <select id="new-config-format">
+                <option value="dc+sd-jwt">dc+sd-jwt</option>
+                <option value="mso_mdoc">mso_mdoc</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -227,7 +233,7 @@
     <script th:inline="javascript">
       (() => {
         const issuer = /*[[${issuer}]]*/ "";
-        let configurationList = [...(/*[[${configurations}]]*/ [])];
+        let configurationList = [...(/*[[${configurationData}]]*/ [])];
         let defaultConfigurationId = /*[[${defaultConfigurationId}]]*/ "";
         const configurationFile = /*[[${configurationFile}]]*/ "";
 
@@ -255,6 +261,7 @@
         const newConfigName = document.getElementById("new-config-name");
         const newConfigScope = document.getElementById("new-config-scope");
         const newConfigVct = document.getElementById("new-config-vct");
+        const newConfigFormat = document.getElementById("new-config-format");
         const addClaimBtn = document.getElementById("add-claim");
         const newClaimsContainer = document.getElementById("new-claims");
         const saveConfigurationBtn = document.getElementById("save-configuration");
@@ -682,8 +689,14 @@
           const name = (newConfigName?.value || "").trim();
           const scope = (newConfigScope?.value || "").trim();
           const vct = (newConfigVct?.value || "").trim();
-          if (!id || !name || !scope || !vct) {
-            showConfigurationFeedback("id, name, scope, and vct are required.", "error");
+          const format = (newConfigFormat?.value || "dc+sd-jwt").trim();
+          if (!id || !name || !scope || !vct || !format) {
+            showConfigurationFeedback("id, name, scope, vct, and format are required.", "error");
+            return null;
+          }
+          const normalizedFormat = format.toLowerCase();
+          if (normalizedFormat !== "dc+sd-jwt" && normalizedFormat !== "mso_mdoc") {
+            showConfigurationFeedback("Format must be dc+sd-jwt or mso_mdoc.", "error");
             return null;
           }
           const claims = newClaimTemplates
@@ -699,7 +712,7 @@
             name,
             scope,
             vct,
-            format: "dc+sd-jwt",
+            format: normalizedFormat,
             claims
           };
         }
@@ -729,6 +742,7 @@
             if (newConfigName) newConfigName.value = "";
             if (newConfigScope) newConfigScope.value = "";
             if (newConfigVct) newConfigVct.value = created.vct || "";
+            if (newConfigFormat) newConfigFormat.value = created.format || "dc+sd-jwt";
             newClaimTemplates = created.claims || [];
             renderNewClaimTemplates();
           } catch (e) {

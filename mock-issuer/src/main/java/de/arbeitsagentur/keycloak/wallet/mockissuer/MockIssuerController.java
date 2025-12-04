@@ -25,6 +25,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -48,9 +49,10 @@ public class MockIssuerController {
         List<MockIssuerProperties.CredentialConfiguration> configs = configurationStore.configurations();
         model.addAttribute("issuer", issuer);
         model.addAttribute("configurations", configs);
+        model.addAttribute("configurationData", toViewConfigurations(configs));
         model.addAttribute("defaultConfigurationId", configs.isEmpty() ? "" : configs.get(0).id());
-        model.addAttribute("configurationFile", properties.configurationFile());
-        model.addAttribute("userConfigurationFile", configurationStore.userConfigurationFile());
+        model.addAttribute("configurationFile", properties.configurationFile() != null ? properties.configurationFile().toString() : "");
+        model.addAttribute("userConfigurationFile", configurationStore.userConfigurationFile() != null ? configurationStore.userConfigurationFile().toString() : "");
         return "mock-issuer";
     }
 
@@ -162,5 +164,31 @@ public class MockIssuerController {
     }
 
     public record CreateClaimRequest(String name, String label, String defaultValue, Boolean required) {
+    }
+
+    private List<Map<String, Object>> toViewConfigurations(List<MockIssuerProperties.CredentialConfiguration> configs) {
+        return configs.stream()
+                .map(this::toViewConfiguration)
+                .toList();
+    }
+
+    private Map<String, Object> toViewConfiguration(MockIssuerProperties.CredentialConfiguration cfg) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("id", cfg.id());
+        view.put("format", cfg.format());
+        view.put("scope", cfg.scope());
+        view.put("name", cfg.name());
+        view.put("vct", cfg.vct());
+        view.put("claims", cfg.claims().stream().map(this::toViewClaim).toList());
+        return view;
+    }
+
+    private Map<String, Object> toViewClaim(MockIssuerProperties.ClaimTemplate claim) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("name", claim.name());
+        view.put("label", claim.label());
+        view.put("defaultValue", claim.defaultValue());
+        view.put("required", claim.required());
+        return view;
     }
 }

@@ -4,6 +4,6 @@ target/
 .DS_Store
 node_modules/
 .env
-data/*
-!data/.gitkeep
+demo-app/data/*
+!demo-app/data/.gitkeep
 

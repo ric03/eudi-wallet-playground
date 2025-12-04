@@ -1,7 +1,7 @@
 package de.arbeitsagentur.keycloak.wallet.verification.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSVerifier;
 import com.nimbusds.jose.crypto.ECDSAVerifier;
@@ -53,7 +53,10 @@ public class TrustListService implements
             List<TrustedVerifier> verifiers = new ArrayList<>();
             List<PublicKey> keys = new ArrayList<>();
             for (JsonNode issuer : node.path("issuers")) {
-                String certPem = issuer.path("certificate").asText();
+                String certPem = issuer.path("certificate").asText(null);
+                if (certPem == null || certPem.isBlank()) {
+                    continue;
+                }
                 PublicKey publicKey = parsePublicKey(certPem);
                 if (publicKey instanceof RSAPublicKey rsaPublicKey) {
                     verifiers.add(new TrustedVerifier(JWSAlgorithm.RS256, new RSASSAVerifier(rsaPublicKey)));

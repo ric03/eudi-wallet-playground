@@ -1,7 +1,7 @@
 package de.arbeitsagentur.keycloak.wallet.mockissuer;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jwt.SignedJWT;
 import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocCredentialBuilder;

@@ -2,8 +2,8 @@ package de.arbeitsagentur.keycloak.wallet.common.sdjwt;
 
 import com.authlete.sd.Disclosure;
 import com.authlete.sd.SDJWT;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtSelectiveDiscloser.ClaimRequest;
 
 import java.util.ArrayList;

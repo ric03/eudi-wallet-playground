@@ -1,10 +1,10 @@
 package de.arbeitsagentur.keycloak.wallet;
 
 import com.authlete.sd.Disclosure;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import com.nimbusds.jose.JWEObject;
 import com.nimbusds.jose.crypto.ECDSAVerifier;
 import com.nimbusds.jose.crypto.ECDHDecrypter;
@@ -30,6 +30,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +41,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.web.client.RestClient;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -55,7 +58,6 @@ import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.demo.oid4vp.PresentationService;
 import de.arbeitsagentur.keycloak.wallet.verification.service.VerifierKeyService;
 import de.arbeitsagentur.keycloak.wallet.verification.service.TrustListService;
-import org.springframework.boot.test.web.client.TestRestTemplate;
 
 import java.io.IOException;
 import java.net.URI;
@@ -82,6 +84,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class WalletIntegrationTest {
+    private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
+            new ParameterizedTypeReference<>() {};
 
     private static final String TEST_USERNAME = "test";
     private static final String TEST_PASSWORD = "test";
@@ -125,10 +129,16 @@ class WalletIntegrationTest {
     CredentialStore credentialStore;
     @Autowired
     TrustListService trustListService;
-    @Autowired
-    TestRestTemplate restTemplate;
+    RestClient restClient;
     @LocalServerPort
     int serverPort;
+
+    @BeforeEach
+    void setUpRestClient() {
+        restClient = RestClient.builder()
+                .baseUrl("http://localhost:" + serverPort)
+                .build();
+    }
 
     @AfterEach
     void cleanup() throws IOException {
@@ -292,7 +302,7 @@ class WalletIntegrationTest {
             String vpTokenValue = presentationForm.fields().get("vp_token");
             assertThat(vpTokenValue).isNotBlank();
             JsonNode vpTokenJson = objectMapper.readTree(vpTokenValue);
-            Map.Entry<String, JsonNode> first = vpTokenJson.fields().next();
+            Map.Entry<String, JsonNode> first = ((ObjectNode) vpTokenJson).properties().iterator().next();
             JsonNode tokenNode = first.getValue();
             String outerToken = tokenNode.isArray() ? tokenNode.get(0).asText() : tokenNode.asText();
             String innerMdoc = SignedJWT.parse(outerToken).getJWTClaimsSet().getStringClaim("vp_token");
@@ -375,7 +385,7 @@ class WalletIntegrationTest {
             String vpTokenValue = presentationForm.fields().get("vp_token");
             assertThat(vpTokenValue).isNotBlank();
             JsonNode vpTokenJson = objectMapper.readTree(vpTokenValue);
-            Map.Entry<String, JsonNode> first = vpTokenJson.fields().next();
+            Map.Entry<String, JsonNode> first = ((ObjectNode) vpTokenJson).properties().iterator().next();
             JsonNode tokenNode = first.getValue();
             String outerToken = tokenNode.isArray() ? tokenNode.get(0).asText() : tokenNode.asText();
             String innerMdoc = SignedJWT.parse(outerToken).getJWTClaimsSet().getStringClaim("vp_token");
@@ -408,10 +418,12 @@ class WalletIntegrationTest {
                 "vct", "urn:example:pid:mock",
                 "claims", List.of(Map.of("name", "given_name", "value", "Charlie"))
         );
-        @SuppressWarnings("unchecked")
-        Map<String, Object> offerResponse = restTemplate.postForObject("/mock-issuer/offers", offerRequest, Map.class);
+        Map<String, Object> offerResponse = restClient.post()
+                .uri("/mock-issuer/offers")
+                .body(offerRequest)
+                .retrieve()
+                .body(MAP_TYPE);
         assertThat(offerResponse).isNotNull();
-        @SuppressWarnings("unchecked")
         Map<String, Object> credentialOffer = (Map<String, Object>) offerResponse.get("credentialOffer");
         String offerJson = objectMapper.writeValueAsString(credentialOffer);
 
@@ -459,10 +471,12 @@ class WalletIntegrationTest {
                 "vct", "org.iso.18013.5.1.mDL",
                 "claims", List.of(Map.of("name", "given_name", "value", "Dana"))
         );
-        @SuppressWarnings("unchecked")
-        Map<String, Object> offerResponse = restTemplate.postForObject("/mock-issuer/offers", offerRequest, Map.class);
+        Map<String, Object> offerResponse = restClient.post()
+                .uri("/mock-issuer/offers")
+                .body(offerRequest)
+                .retrieve()
+                .body(MAP_TYPE);
         assertThat(offerResponse).isNotNull();
-        @SuppressWarnings("unchecked")
         Map<String, Object> credentialOffer = (Map<String, Object>) offerResponse.get("credentialOffer");
         String offerJson = objectMapper.writeValueAsString(credentialOffer);
 
@@ -575,8 +589,9 @@ class WalletIntegrationTest {
             );
             String vpTokenJson = form.fields().get("vp_token");
             JsonNode vpNode = objectMapper.readTree(vpTokenJson);
-            assertThat(vpNode.elements().hasNext()).isTrue();
-            JsonNode firstPresentation = vpNode.elements().next();
+            var presentations = vpNode.iterator();
+            assertThat(presentations.hasNext()).isTrue();
+            JsonNode firstPresentation = presentations.next();
             assertThat(firstPresentation.isArray()).isTrue();
             String vpToken = firstPresentation.get(0).asText();
             SdJwtParts presentedParts = SdJwtUtils.split(vpToken);
@@ -853,7 +868,7 @@ class WalletIntegrationTest {
             String vpTokenValue = presentationForm.fields().get("vp_token");
             assertThat(vpTokenValue).isNotBlank();
             JsonNode vpTokenJson = objectMapper.readTree(vpTokenValue);
-            Map.Entry<String, JsonNode> first = vpTokenJson.fields().next();
+            Map.Entry<String, JsonNode> first = ((ObjectNode) vpTokenJson).properties().iterator().next();
             JsonNode firstTokenNode = first.getValue();
             String outerToken = firstTokenNode.isArray() ? firstTokenNode.get(0).asText() : firstTokenNode.asText();
             String innerVp = SignedJWT.parse(outerToken).getJWTClaimsSet().getStringClaim("vp_token");
@@ -977,7 +992,7 @@ class WalletIntegrationTest {
 
             JsonNode vpTokenJson = objectMapper.readTree(vpTokenValue);
             Set<String> keys = new HashSet<>();
-            vpTokenJson.fieldNames().forEachRemaining(keys::add);
+            vpTokenJson.propertyNames().forEach(keys::add);
             assertThat(keys).containsExactlyInAnyOrder("primary", "secondary");
             String primaryToken = vpTokenJson.get("primary").get(0).asText();
             String secondaryToken = vpTokenJson.get("secondary").get(0).asText();
@@ -1047,7 +1062,7 @@ class WalletIntegrationTest {
                 String vpTokenValue = form.select("input[name=vp_token]").attr("value");
                 assertThat(vpTokenValue).isNotBlank();
                 JsonNode parsed = objectMapper.readTree(vpTokenValue);
-                assertThat(parsed.fieldNames().next()).isEqualTo("any");
+                assertThat(parsed.propertyNames().iterator().next()).isEqualTo("any");
             }
         }
     }
@@ -1981,11 +1996,12 @@ class WalletIntegrationTest {
             JsonNode node = objectMapper.readTree(raw);
             List<String> tokens = new ArrayList<>();
             if (node.isObject()) {
-                node.fields().forEachRemaining(entry -> {
-                    if (entry.getValue().isArray()) {
-                        entry.getValue().forEach(v -> tokens.add(v.asText()));
+                ((ObjectNode) node).properties().forEach(entry -> {
+                    JsonNode value = entry.getValue();
+                    if (value.isArray()) {
+                        value.forEach(v -> tokens.add(v.asText()));
                     } else {
-                        tokens.add(entry.getValue().asText());
+                        tokens.add(value.asText());
                     }
                 });
             } else if (node.isArray()) {

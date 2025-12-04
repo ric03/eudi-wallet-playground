@@ -1,6 +1,6 @@
 package de.arbeitsagentur.keycloak.wallet.demo.oid4vp;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
 import org.junit.jupiter.api.BeforeEach;

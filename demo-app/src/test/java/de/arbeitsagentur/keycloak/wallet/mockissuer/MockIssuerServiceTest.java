@@ -1,6 +1,6 @@
 package de.arbeitsagentur.keycloak.wallet.mockissuer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.MockIssuerService.BuilderRequest;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.MockIssuerService.ClaimInput;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.config.MockIssuerConfigurationStore;

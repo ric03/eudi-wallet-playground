@@ -4,8 +4,8 @@ import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
 import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -71,7 +71,7 @@ public class CredentialService {
             throw new IllegalStateException("Issuer metadata not available");
         }
         String issuerIdentifier = metadata.path("credential_issuer").asText(properties.issuerMetadataUrl());
-        String credentialEndpoint = metadata.path("credential_endpoint").asText();
+        String credentialEndpoint = metadata.path("credential_endpoint").asText(null);
         if (credentialEndpoint == null || credentialEndpoint.isBlank()) {
             throw new IllegalStateException("Issuer metadata missing credential endpoint");
         }
@@ -106,7 +106,7 @@ public class CredentialService {
                 credentialEndpoint,
                 headers.toSingleValueMap(),
                 prettyJson(objectMapper.convertValue(requestBody, JsonNode.class)),
-                response.getStatusCodeValue(),
+                response.getStatusCode().value(),
                 response.getHeaders().toSingleValueMap(),
                 prettyJson(body),
                 "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-7",
@@ -223,12 +223,16 @@ public class CredentialService {
                 nonceEndpointNode.asText(),
                 headers.toSingleValueMap(),
                 "",
-                response.getStatusCodeValue(),
+                response.getStatusCode().value(),
                 response.getHeaders().toSingleValueMap(),
                 prettyJson(body),
                 "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-7.2.1",
                 null);
-        return new NonceInfo(body.path("c_nonce").asText(), "issuer");
+        String cNonce = body.path("c_nonce").asText(null);
+        if (cNonce == null) {
+            throw new IllegalStateException("Issuer response missing c_nonce");
+        }
+        return new NonceInfo(cNonce, "issuer");
     }
 
     private record NonceInfo(String nonce, String source) {

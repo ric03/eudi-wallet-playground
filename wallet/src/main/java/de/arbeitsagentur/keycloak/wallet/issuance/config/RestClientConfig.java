@@ -6,8 +6,10 @@ import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactory;
 import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactoryBuilder;
+import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.core5.ssl.SSLContextBuilder;
 import org.apache.hc.core5.ssl.SSLContexts;
+import org.apache.hc.core5.util.Timeout;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
@@ -29,14 +31,20 @@ public class RestClientConfig {
 
     @Bean
     RestTemplate restTemplate() {
+        Duration timeout = Duration.ofSeconds(5);
         HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(5));
-        factory.setConnectionRequestTimeout(Duration.ofSeconds(5));
-        factory.setHttpClient(buildHttpClient());
+        factory.setConnectionRequestTimeout(timeout);
+        factory.setReadTimeout(timeout);
+        factory.setHttpClient(buildHttpClient(timeout));
         return new RestTemplate(factory);
     }
 
-    private HttpClient buildHttpClient() {
+    private HttpClient buildHttpClient(Duration timeout) {
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setConnectTimeout(Timeout.of(timeout))
+                .setConnectionRequestTimeout(Timeout.of(timeout))
+                .setResponseTimeout(Timeout.of(timeout))
+                .build();
         try {
             if (properties.tlsKeyStore() != null && Files.exists(properties.tlsKeyStore())) {
                 String type = properties.tlsKeyStoreType() != null ? properties.tlsKeyStoreType() : "PKCS12";
@@ -55,11 +63,16 @@ public class RestClientConfig {
                 PoolingHttpClientConnectionManager manager = PoolingHttpClientConnectionManagerBuilder.create()
                         .setSSLSocketFactory(socketFactory)
                         .build();
-                return HttpClients.custom().setConnectionManager(manager).build();
+                return HttpClients.custom()
+                        .setDefaultRequestConfig(requestConfig)
+                        .setConnectionManager(manager)
+                        .build();
             }
         } catch (Exception e) {
             throw new IllegalStateException("Unable to configure TLS client", e);
         }
-        return HttpClients.createDefault();
+        return HttpClients.custom()
+                .setDefaultRequestConfig(requestConfig)
+                .build();
     }
 }

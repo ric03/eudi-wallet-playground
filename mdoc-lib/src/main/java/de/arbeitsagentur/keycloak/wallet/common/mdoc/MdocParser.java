@@ -1,11 +1,11 @@
 package de.arbeitsagentur.keycloak.wallet.common.mdoc;
 
-import com.fasterxml.jackson.dataformat.cbor.databind.CBORMapper;
+import tools.jackson.dataformat.cbor.CBORMapper;
 import de.arbeitsagentur.keycloak.wallet.common.util.HexUtils;
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.Collections;
