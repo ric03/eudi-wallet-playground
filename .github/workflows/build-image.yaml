@@ -30,6 +30,7 @@ jobs:
           --batch-mode
           -DskipTests
           -pl demo-app
+          -am
           -Dspring-boot.build-image.imageName=ghcr.io/${{ github.repository }}:\${project.version}
           -Dspring-boot.build-image.publish=true
           spring-boot:build-image
